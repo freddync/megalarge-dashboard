@@ -498,7 +498,7 @@ st.sidebar.markdown(f"**{len(filtered)}** empresas en el filtro actual (de {len(
 st.sidebar.markdown("---")
 st.sidebar.markdown(texto_actualizacion(summary))
 st.sidebar.caption(
-    "Los precios se actualizan solos dos veces por día hábil (11:30 y 23:30 hora de Nueva York) "
+    "Los precios se actualizan solos dos veces por día hábil (12:00 y 23:30 hora de Nueva York) "
     "mediante GitHub Actions. Los fundamentales se actualizan a mano cada trimestre."
 )
 

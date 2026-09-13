@@ -79,9 +79,9 @@ Los precios se actualizan **solos**, sin necesidad de encender el computador. La
 `.github/workflows/actualizar-precios.yml` corre **dos veces por día hábil, en hora de
 Nueva York**:
 
-- **11:30 AM NY** — dos horas después de la apertura. Captura la **sesión en curso**: el
-  "cierre" de esa última barra es el precio del momento y el volumen está incompleto. El
-  dashboard lo marca explícitamente cuando ocurre.
+- **12:00 PM NY** — media sesión, con la hora 11:00-12:00 ya cerrada. Captura la **sesión
+  en curso**: el "cierre" de esa última barra es el precio del momento y el volumen está
+  incompleto. El dashboard lo marca explícitamente cuando ocurre.
 - **11:30 PM NY** — bien pasado el cierre, con el día ya consolidado.
 
 Baja los precios de las 894 empresas desde Yahoo, reescribe `data/precios/` y

@@ -1,7 +1,7 @@
 name: Actualizar precios
 
 # Objetivo: correr dos veces por dia habil, en HORA DE NUEVA YORK:
-#   11:30 AM NY -> 2 horas despues de la apertura (sesion en curso)
+#   12:00 PM NY -> media sesion, con la hora 11:00-12:00 ya cerrada
 #   11:30 PM NY -> bien pasado el cierre, con el dia ya consolidado
 #
 # El cron de GitHub solo entiende UTC y no ajusta por horario de verano, asi que
@@ -10,8 +10,8 @@ name: Actualizar precios
 # correria una hora dos veces al año.
 on:
   schedule:
-    - cron: "30 15 * * 1-5"   # 11:30 NY en horario de verano (EDT)
-    - cron: "30 16 * * 1-5"   # 11:30 NY en horario de invierno (EST)
+    - cron: "0 16 * * 1-5"    # 12:00 NY en horario de verano (EDT)
+    - cron: "0 17 * * 1-5"    # 12:00 NY en horario de invierno (EST)
     - cron: "30 3 * * 2-6"    # 23:30 NY (EDT) -> cae al dia siguiente en UTC
     - cron: "30 4 * * 2-6"    # 23:30 NY (EST) -> cae al dia siguiente en UTC
   workflow_dispatch:          # permite lanzarlo a mano desde la pestaña Actions
@@ -41,7 +41,7 @@ jobs:
           elif [ "$NY_DIA" -gt 5 ]; then
             echo "Es fin de semana en NY: se omite."
             echo "correr=no" >> "$GITHUB_OUTPUT"
-          elif [ "$NY_HORA" = "11" ] || [ "$NY_HORA" = "23" ]; then
+          elif [ "$NY_HORA" = "12" ] || [ "$NY_HORA" = "23" ]; then
             echo "Corresponde a una de las dos corridas del dia: se actualiza."
             echo "correr=si" >> "$GITHUB_OUTPUT"
           else
