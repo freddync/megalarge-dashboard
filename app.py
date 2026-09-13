@@ -4,6 +4,8 @@ Dashboard integrado Megacap + Large Cap (NYSE/NASDAQ/AMEX) -- SMA100/SMA200.
 Corre local con:  streamlit run app.py
 """
 
+import os
+
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -33,13 +35,32 @@ def get_company_info():
 @st.cache_data(ttl=300, show_spinner=False)
 def get_sello():
     """Fecha/hora de la ultima actualizacion de precios (TTL corto: cambia dos
-    veces al dia y conviene que la app lo refleje pronto tras un redeploy)."""
-    return dl.load_sello_actualizacion()
+    veces al dia y conviene que la app lo refleje pronto tras un redeploy).
+
+    Se lee el JSON directamente, sin pasar por data_layer, a proposito: si el
+    entorno quedara con una version desactualizada de ese modulo en memoria
+    (pasa en Streamlit Cloud tras un push), esta funcion seguiria andando.
+    """
+    import json as _json
+    ruta = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "data", "_ultima_actualizacion.json")
+    try:
+        with open(ruta, encoding="utf-8") as f:
+            return _json.load(f)
+    except Exception:
+        return None
 
 
 def texto_actualizacion(summary):
-    """Linea legible con cuando se actualizaron los precios y que tan viejo es."""
-    sello = get_sello()
+    """Linea legible con cuando se actualizaron los precios y que tan viejo es.
+
+    Es informacion accesoria: si algo falla aca, se devuelve un texto vacio en
+    vez de dejar caer todo el dashboard.
+    """
+    try:
+        sello = get_sello()
+    except Exception:
+        sello = None
     ultima_sesion = summary["last_date"].max() if len(summary) else None
 
     if not sello:
