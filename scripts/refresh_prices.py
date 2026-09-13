@@ -42,6 +42,8 @@ PRECIOS_DIR = os.path.join(DATA_DIR, "precios")
 SEMANAL_DIR = os.path.join(DATA_DIR, "precios_semanal")
 COMPANY_INFO = os.path.join(DATA_DIR, "company_info.json")
 
+SELLO_PATH = os.path.join(DATA_DIR, "_ultima_actualizacion.json")
+
 N_ROWS_KEEP = 1250     # diario: SMA200 + ~1000 sesiones para graficar
 N_WEEKS_KEEP = 600     # semanal: ~11 años, para que la SMA200 semanal tenga recorrido
 
@@ -145,6 +147,23 @@ def weekly_from_daily(df: pd.DataFrame) -> pd.DataFrame:
     return wk
 
 
+def escribir_sello(ok: int, failed: int, ultima_sesion: str | None):
+    """Deja constancia de cuando se actualizaron los precios, para mostrarlo en
+    el dashboard. Se guarda en UTC (sin ambigüedad) y la app lo convierte."""
+    from zoneinfo import ZoneInfo
+    ahora = datetime.datetime.now(datetime.timezone.utc)
+    sello = {
+        "utc": ahora.strftime("%Y-%m-%d %H:%M:%S"),
+        "ny": ahora.astimezone(ZoneInfo("America/New_York")).strftime("%Y-%m-%d %H:%M %Z"),
+        "tickers_ok": ok,
+        "tickers_fallidos": failed,
+        "ultima_sesion": ultima_sesion,
+    }
+    with open(SELLO_PATH, "w", encoding="utf-8") as f:
+        json.dump(sello, f, ensure_ascii=False, indent=1)
+    print(f"Sello de actualizacion: {sello['ny']} (ultima sesion con datos: {ultima_sesion})")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=0, help="procesar solo los primeros N tickers (para pruebas)")
@@ -165,6 +184,7 @@ def main():
     t0 = time.time()
     ok = failed = changed = 0
     fallidos = []
+    ultima_sesion = None    # fecha mas reciente vista en los datos
 
     for i, ticker in enumerate(tickers, start=1):
         res = fetch_prices(ticker)
@@ -188,6 +208,10 @@ def main():
                          to_csv_text(weekly_from_daily(df)))
         ok += 1
 
+        fecha = df["Date"].max().strftime("%Y-%m-%d")
+        if ultima_sesion is None or fecha > ultima_sesion:
+            ultima_sesion = fecha
+
         if i % 50 == 0 or i == len(tickers):
             print(f"  [{i}/{len(tickers)}] ok={ok} fallidos={failed} "
                   f"({time.time()-t0:.0f}s)", flush=True)
@@ -200,8 +224,12 @@ def main():
 
     ratio = failed / max(len(tickers), 1)
     if ratio > MAX_FAIL_RATIO:
+        # No se escribe el sello: si la corrida fue mala, el dashboard debe seguir
+        # mostrando la fecha de la ultima actualizacion que si funciono.
         sys.exit(f"ERROR: fallo el {ratio:.0%} de los tickers (umbral {MAX_FAIL_RATIO:.0%}). "
                  "Probablemente Yahoo esta bloqueando o limitando las peticiones.")
+
+    escribir_sello(ok, failed, ultima_sesion)
     print("OK")
 
 

@@ -1,19 +1,24 @@
 name: Actualizar precios
 
-# Corre solo, de lunes a viernes, despues del cierre del mercado en EE.UU.
-# 23:30 UTC = 19:30 ET en horario de verano / 18:30 ET en invierno, o sea siempre
-# despues del cierre (16:00 ET) del mismo dia de operacion.
-# Ojo: GitHub puede atrasar los cron unos minutos cuando hay mucha carga.
+# Objetivo: correr dos veces por dia habil, en HORA DE NUEVA YORK:
+#   11:30 AM NY -> 2 horas despues de la apertura (sesion en curso)
+#   11:30 PM NY -> bien pasado el cierre, con el dia ya consolidado
+#
+# El cron de GitHub solo entiende UTC y no ajusta por horario de verano, asi que
+# se programan las DOS variantes (EDT = UTC-4, EST = UTC-5) y el primer paso
+# descarta la que no corresponda segun la fecha. De lo contrario el horario se
+# correria una hora dos veces al año.
 on:
   schedule:
-    - cron: "30 23 * * 1-5"
-  workflow_dispatch:        # permite lanzarlo a mano desde la pestaña Actions
+    - cron: "30 15 * * 1-5"   # 11:30 NY en horario de verano (EDT)
+    - cron: "30 16 * * 1-5"   # 11:30 NY en horario de invierno (EST)
+    - cron: "30 3 * * 2-6"    # 23:30 NY (EDT) -> cae al dia siguiente en UTC
+    - cron: "30 4 * * 2-6"    # 23:30 NY (EST) -> cae al dia siguiente en UTC
+  workflow_dispatch:          # permite lanzarlo a mano desde la pestaña Actions
 
-# Necesario para que la Action pueda hacer commit y push de los datos nuevos.
 permissions:
   contents: write
 
-# Si una corrida se alarga, evita que se pisen dos al mismo tiempo.
 concurrency:
   group: actualizar-precios
   cancel-in-progress: false
@@ -24,21 +29,46 @@ jobs:
     timeout-minutes: 90
 
     steps:
+      - name: Verificar que corresponde a esta hora de NY
+        id: guard
+        run: |
+          NY_HORA=$(TZ=America/New_York date +%H)
+          NY_DIA=$(TZ=America/New_York date +%u)      # 1=lunes ... 7=domingo
+          echo "Hora en Nueva York: $(TZ=America/New_York date '+%Y-%m-%d %H:%M %Z')"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "Ejecucion manual: se corre igual."
+            echo "correr=si" >> "$GITHUB_OUTPUT"
+          elif [ "$NY_DIA" -gt 5 ]; then
+            echo "Es fin de semana en NY: se omite."
+            echo "correr=no" >> "$GITHUB_OUTPUT"
+          elif [ "$NY_HORA" = "11" ] || [ "$NY_HORA" = "23" ]; then
+            echo "Corresponde a una de las dos corridas del dia: se actualiza."
+            echo "correr=si" >> "$GITHUB_OUTPUT"
+          else
+            echo "Esta es la variante de horario (verano/invierno) que hoy no aplica: se omite."
+            echo "correr=no" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Descargar el repositorio
+        if: steps.guard.outputs.correr == 'si'
         uses: actions/checkout@v4
 
       - name: Preparar Python
+        if: steps.guard.outputs.correr == 'si'
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
       - name: Instalar dependencias
+        if: steps.guard.outputs.correr == 'si'
         run: pip install requests pandas
 
       - name: Actualizar precios desde Yahoo
+        if: steps.guard.outputs.correr == 'si'
         run: python scripts/refresh_prices.py
 
       - name: Publicar los datos nuevos
+        if: steps.guard.outputs.correr == 'si'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -46,7 +76,7 @@ jobs:
             echo "Sin cambios en los datos (probablemente feriado o mercado cerrado)."
             exit 0
           fi
-          git add data/precios data/precios_semanal
-          git commit -m "Actualizacion automatica de precios ($(date -u +%Y-%m-%d))"
+          git add data/precios data/precios_semanal data/_ultima_actualizacion.json
+          git commit -m "Actualizacion automatica de precios ($(TZ=America/New_York date '+%Y-%m-%d %H:%M NY'))"
           git push
           echo "Datos publicados. Streamlit Cloud va a redeployar solo en 1-2 minutos."

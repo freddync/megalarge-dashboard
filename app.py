@@ -29,6 +29,56 @@ PRICE_ROW_FRAC = 0.74
 def get_company_info():
     return dl.load_company_info()
 
+
+@st.cache_data(ttl=300, show_spinner=False)
+def get_sello():
+    """Fecha/hora de la ultima actualizacion de precios (TTL corto: cambia dos
+    veces al dia y conviene que la app lo refleje pronto tras un redeploy)."""
+    return dl.load_sello_actualizacion()
+
+
+def texto_actualizacion(summary):
+    """Linea legible con cuando se actualizaron los precios y que tan viejo es."""
+    sello = get_sello()
+    ultima_sesion = summary["last_date"].max() if len(summary) else None
+
+    if not sello:
+        # sin sello (datos antiguos o generados a mano): al menos la ultima sesion
+        return (f"Última sesión con datos: **{ultima_sesion}**" if ultima_sesion
+                else "Sin información de actualización.")
+
+    try:
+        from zoneinfo import ZoneInfo
+        import datetime as _dt
+        ts = _dt.datetime.strptime(sello["utc"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=_dt.timezone.utc)
+        delta = _dt.datetime.now(_dt.timezone.utc) - ts
+        horas = delta.total_seconds() / 3600
+        if horas < 1:
+            antiguedad = f"hace {int(delta.total_seconds() / 60)} min"
+        elif horas < 48:
+            antiguedad = f"hace {int(horas)} h"
+        else:
+            antiguedad = f"hace {int(horas / 24)} días"
+        ny = ts.astimezone(ZoneInfo("America/New_York")).strftime("%d-%b %H:%M")
+        local = ts.astimezone(ZoneInfo("America/Santiago")).strftime("%d-%b %H:%M")
+    except Exception:
+        return f"Precios actualizados: **{sello.get('ny', sello.get('utc', '?'))}**"
+
+    fallidos = sello.get("tickers_fallidos", 0)
+    aviso = f" · ⚠️ {fallidos} empresas sin datos en esa corrida" if fallidos else ""
+
+    # Si la ultima barra es la del dia de hoy en NY, viene de la sesion en curso:
+    # su cierre es el precio del momento y el volumen esta incompleto.
+    sesion = sello.get("ultima_sesion") or ultima_sesion
+    try:
+        hoy_ny = _dt.datetime.now(ZoneInfo("America/New_York")).strftime("%Y-%m-%d")
+        en_curso = " _(sesión en curso: cierre y volumen aún parciales)_" if sesion == hoy_ny else ""
+    except Exception:
+        en_curso = ""
+
+    return (f"🔄 Precios actualizados: **{ny} NY** ({local} Chile, {antiguedad}) · "
+            f"última sesión en los datos: **{sesion}**{en_curso}{aviso}")
+
 @st.cache_data(show_spinner="Calculando SMA y resumen técnico para todas las empresas (primera carga puede tardar ~20s)...")
 def get_summary(window, freq=dl.FREQ_DAILY):
     info = get_company_info()
@@ -446,9 +496,10 @@ if sel_sector != "Todos":
 
 st.sidebar.markdown(f"**{len(filtered)}** empresas en el filtro actual (de {len(summary)} totales)")
 st.sidebar.markdown("---")
+st.sidebar.markdown(texto_actualizacion(summary))
 st.sidebar.caption(
-    "Datos técnicos y fundamentales bundleados en el repo (sin llamadas de red en vivo). "
-    "Para refrescar: corre el script de actualización local y sube (git push) los datos nuevos."
+    "Los precios se actualizan solos dos veces por día hábil (11:30 y 23:30 hora de Nueva York) "
+    "mediante GitHub Actions. Los fundamentales se actualizan a mano cada trimestre."
 )
 
 # ---------------------------------------------------------------------------
@@ -457,6 +508,7 @@ st.sidebar.caption(
 
 if view == "General":
     st.title(f"Resumen general — SMA{sma_window}")
+    st.markdown(texto_actualizacion(summary))
     st.caption(f"{len(filtered)} empresas · Zona = posición del precio respecto a la banda SMA{sma_window}±1.5σ · "
                "Momentum compara la última semana vs. el promedio de las 3 previas · "
                "Acel. 2 sem compara solo contra la semana anterior")

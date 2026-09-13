@@ -43,9 +43,28 @@ FUND_ROWS = [
 ]
 
 
+SELLO_PATH = os.path.join(DATA_DIR, "_ultima_actualizacion.json")
+
+
 def load_company_info():
     with open(COMPANY_INFO_PATH, encoding="utf-8") as f:
         return json.load(f)
+
+
+def load_sello_actualizacion():
+    """Cuando se actualizaron los precios por ultima vez.
+
+    Lo escribe el proceso que baja los datos (scripts/refresh_prices.py o
+    update_data.py). Si no existe el archivo devuelve None y la app cae a
+    mostrar solo la ultima sesion presente en los datos.
+    """
+    if not os.path.exists(SELLO_PATH):
+        return None
+    try:
+        with open(SELLO_PATH, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return None
 
 
 def list_tickers():

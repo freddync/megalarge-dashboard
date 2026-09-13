@@ -131,6 +131,37 @@ def rebuild_prices(tickers):
 
     print(f"precios diarios: {n_ok}/{len(tickers)} tickers")
     print(f"precios semanales: {n_sem}/{len(tickers)} tickers")
+    return n_ok
+
+
+def escribir_sello(n_ok):
+    """Deja el mismo sello de actualizacion que genera la Action, para que el
+    dashboard muestre la fecha correcta tambien cuando actualizas a mano."""
+    import datetime
+    from zoneinfo import ZoneInfo
+
+    ultima = None
+    for fn in os.listdir(PRECIOS_OUT):
+        if not fn.endswith(".csv"):
+            continue
+        try:
+            fecha = pd.read_csv(os.path.join(PRECIOS_OUT, fn), usecols=["Date"])["Date"].max()
+        except Exception:
+            continue
+        if ultima is None or fecha > ultima:
+            ultima = fecha
+
+    ahora = datetime.datetime.now(datetime.timezone.utc)
+    sello = {
+        "utc": ahora.strftime("%Y-%m-%d %H:%M:%S"),
+        "ny": ahora.astimezone(ZoneInfo("America/New_York")).strftime("%Y-%m-%d %H:%M %Z"),
+        "tickers_ok": n_ok,
+        "tickers_fallidos": 0,
+        "ultima_sesion": ultima,
+    }
+    with open(os.path.join(DATA_DIR, "_ultima_actualizacion.json"), "w", encoding="utf-8") as f:
+        json.dump(sello, f, ensure_ascii=False, indent=1)
+    print(f"sello de actualizacion: {sello['ny']} (ultima sesion: {ultima})")
 
 
 def rebuild_fundamentals(tickers):
@@ -150,8 +181,9 @@ if __name__ == "__main__":
     check_sources()
     os.makedirs(DATA_DIR, exist_ok=True)
     tickers = rebuild_company_info()
-    rebuild_prices(tickers)
+    n_ok = rebuild_prices(tickers)
     rebuild_fundamentals(tickers)
+    escribir_sello(n_ok)
     print("\nListo. Ahora sube los cambios con git:")
     print("  git add -A")
     print('  git commit -m "actualizar datos"')

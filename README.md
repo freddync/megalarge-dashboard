@@ -76,10 +76,20 @@ repository from the command line").
 ### Actualización automática de precios (GitHub Actions)
 
 Los precios se actualizan **solos**, sin necesidad de encender el computador. La Action
-`.github/workflows/actualizar-precios.yml` corre de lunes a viernes a las 23:30 UTC
-(después del cierre en EE.UU.), baja los precios de las 894 empresas desde Yahoo,
-reescribe `data/precios/` y `data/precios_semanal/`, y hace commit. Streamlit Cloud
-detecta el push y redeploya solo.
+`.github/workflows/actualizar-precios.yml` corre **dos veces por día hábil, en hora de
+Nueva York**:
+
+- **11:30 AM NY** — dos horas después de la apertura. Captura la **sesión en curso**: el
+  "cierre" de esa última barra es el precio del momento y el volumen está incompleto. El
+  dashboard lo marca explícitamente cuando ocurre.
+- **11:30 PM NY** — bien pasado el cierre, con el día ya consolidado.
+
+Baja los precios de las 894 empresas desde Yahoo, reescribe `data/precios/` y
+`data/precios_semanal/`, y hace commit. Streamlit Cloud detecta el push y redeploya solo.
+
+Nota técnica: el cron de GitHub solo entiende UTC y no ajusta por horario de verano, así
+que están programadas las dos variantes (EDT y EST) y el primer paso del workflow descarta
+la que no corresponde. De lo contrario el horario se correría una hora dos veces al año.
 
 - **Lanzarla a mano**: pestaña *Actions* del repo → "Actualizar precios" → *Run workflow*.
 - **Si un ticker falla**, se conserva su CSV anterior (nunca se borra ni se deja a medias).
