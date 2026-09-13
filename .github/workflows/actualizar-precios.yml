@@ -1,0 +1,52 @@
+name: Actualizar precios
+
+# Corre solo, de lunes a viernes, despues del cierre del mercado en EE.UU.
+# 23:30 UTC = 19:30 ET en horario de verano / 18:30 ET en invierno, o sea siempre
+# despues del cierre (16:00 ET) del mismo dia de operacion.
+# Ojo: GitHub puede atrasar los cron unos minutos cuando hay mucha carga.
+on:
+  schedule:
+    - cron: "30 23 * * 1-5"
+  workflow_dispatch:        # permite lanzarlo a mano desde la pestaña Actions
+
+# Necesario para que la Action pueda hacer commit y push de los datos nuevos.
+permissions:
+  contents: write
+
+# Si una corrida se alarga, evita que se pisen dos al mismo tiempo.
+concurrency:
+  group: actualizar-precios
+  cancel-in-progress: false
+
+jobs:
+  precios:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Descargar el repositorio
+        uses: actions/checkout@v4
+
+      - name: Preparar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependencias
+        run: pip install requests pandas
+
+      - name: Actualizar precios desde Yahoo
+        run: python scripts/refresh_prices.py
+
+      - name: Publicar los datos nuevos
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet; then
+            echo "Sin cambios en los datos (probablemente feriado o mercado cerrado)."
+            exit 0
+          fi
+          git add data/precios data/precios_semanal
+          git commit -m "Actualizacion automatica de precios ($(date -u +%Y-%m-%d))"
+          git push
+          echo "Datos publicados. Streamlit Cloud va a redeployar solo en 1-2 minutos."

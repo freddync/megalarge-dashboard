@@ -73,7 +73,24 @@ repository from the command line").
 5. Cuando termine, te da un link público (algo como `https://tu-usuario-fintual-dashboard.streamlit.app`)
    — ese es el que puedes abrir desde cualquier dispositivo o compartir.
 
-### Actualizar los datos después de publicado
+### Actualización automática de precios (GitHub Actions)
+
+Los precios se actualizan **solos**, sin necesidad de encender el computador. La Action
+`.github/workflows/actualizar-precios.yml` corre de lunes a viernes a las 23:30 UTC
+(después del cierre en EE.UU.), baja los precios de las 894 empresas desde Yahoo,
+reescribe `data/precios/` y `data/precios_semanal/`, y hace commit. Streamlit Cloud
+detecta el push y redeploya solo.
+
+- **Lanzarla a mano**: pestaña *Actions* del repo → "Actualizar precios" → *Run workflow*.
+- **Si un ticker falla**, se conserva su CSV anterior (nunca se borra ni se deja a medias).
+- **Si falla más del 20% de los tickers**, la Action queda en rojo y GitHub te avisa por
+  correo, en vez de dejar datos viejos en silencio.
+- Es gratis e ilimitado porque el repositorio es público.
+
+Los **fundamentales no** se actualizan por esta vía (cambian cada trimestre): para esos
+sigue el flujo manual de abajo.
+
+### Actualizar los datos a mano (fundamentales, o si prefieres control total)
 
 Streamlit Cloud redeploya automáticamente cada vez que detecta un push nuevo a la rama
 conectada. El flujo para refrescar precios/fundamentales es:
