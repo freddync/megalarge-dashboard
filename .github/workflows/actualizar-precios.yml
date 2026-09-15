@@ -29,23 +29,35 @@ jobs:
     timeout-minutes: 90
 
     steps:
-      - name: Verificar que corresponde a esta hora de NY
+      - name: Verificar si esta corrida corresponde
         id: guard
         run: |
-          NY_HORA=$(TZ=America/New_York date +%H)
-          NY_DIA=$(TZ=America/New_York date +%u)      # 1=lunes ... 7=domingo
+          NY_ZONA=$(TZ=America/New_York date +%Z)      # EDT (verano) o EST (invierno)
+          CRON="${{ github.event.schedule }}"
           echo "Hora en Nueva York: $(TZ=America/New_York date '+%Y-%m-%d %H:%M %Z')"
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "Ejecucion manual: se corre igual."
+          echo "Cron que disparo:   '${CRON:-(ninguno: ejecucion manual)}'"
+
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "-> Ejecucion manual: se corre igual."
             echo "correr=si" >> "$GITHUB_OUTPUT"
-          elif [ "$NY_DIA" -gt 5 ]; then
-            echo "Es fin de semana en NY: se omite."
-            echo "correr=no" >> "$GITHUB_OUTPUT"
-          elif [ "$NY_HORA" = "12" ] || [ "$NY_HORA" = "23" ]; then
-            echo "Corresponde a una de las dos corridas del dia: se actualiza."
+            exit 0
+          fi
+
+          # Cada horario tiene dos crons: uno para cuando NY esta en EDT y otro
+          # para EST. Se decide mirando CUAL cron disparo, no la hora actual:
+          # GitHub puede atrasar los cron varias horas cuando hay carga, y
+          # comparar contra el reloj hacia que se descartara la corrida entera.
+          case "$CRON" in
+            "0 16 * * 1-5"|"30 3 * * 2-6") ESPERADA="EDT" ;;
+            "0 17 * * 1-5"|"30 4 * * 2-6") ESPERADA="EST" ;;
+            *) ESPERADA="$NY_ZONA" ;;                  # cron desconocido: no bloquear
+          esac
+
+          if [ "$NY_ZONA" = "$ESPERADA" ]; then
+            echo "-> Nueva York esta en $NY_ZONA y este cron es la variante correcta: se actualiza."
             echo "correr=si" >> "$GITHUB_OUTPUT"
           else
-            echo "Esta es la variante de horario (verano/invierno) que hoy no aplica: se omite."
+            echo "-> Nueva York esta en $NY_ZONA y este cron es la variante $ESPERADA: se omite."
             echo "correr=no" >> "$GITHUB_OUTPUT"
           fi
 
