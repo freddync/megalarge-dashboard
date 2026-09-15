@@ -32,6 +32,24 @@ def get_company_info():
     return dl.load_company_info()
 
 
+def data_version():
+    """Identificador de la version de los datos que hay en disco.
+
+    Se usa como parte de la clave de cache de los calculos pesados: cuando la
+    Action publica precios nuevos, este valor cambia y las caches se recalculan
+    solas, sin depender de que el proceso se reinicie.
+    """
+    sello = get_sello()
+    if sello and sello.get("utc"):
+        return sello["utc"]
+    # sin sello: usar la fecha de modificacion del directorio de precios
+    try:
+        return str(os.path.getmtime(os.path.join(
+            os.path.dirname(os.path.abspath(__file__)), "data", "precios")))
+    except Exception:
+        return "sin-version"
+
+
 @st.cache_data(ttl=300, show_spinner=False)
 def get_sello():
     """Fecha/hora de la ultima actualizacion de precios (TTL corto: cambia dos
@@ -101,12 +119,14 @@ def texto_actualizacion(summary):
             f"última sesión en los datos: **{sesion}**{en_curso}{aviso}")
 
 @st.cache_data(show_spinner="Calculando SMA y resumen técnico para todas las empresas (primera carga puede tardar ~20s)...")
-def get_summary(window, freq=dl.FREQ_DAILY):
+def get_summary(window, freq=dl.FREQ_DAILY, version=""):
+    """`version` no se usa dentro: existe solo para que la cache se invalide
+    cuando cambian los datos en disco (ver data_version())."""
     info = get_company_info()
     return dl.build_summary(window, info, freq)
 
 @st.cache_data(show_spinner=False)
-def get_price_df(ticker, freq=dl.FREQ_DAILY):
+def get_price_df(ticker, freq=dl.FREQ_DAILY, version=""):
     return dl.get_series(ticker, freq)
 
 @st.cache_data(show_spinner=False)
@@ -118,9 +138,9 @@ def get_fund_quarterly(ticker):
     return dl.load_fund_csv(ticker, "trimestral")
 
 @st.cache_data(show_spinner=False)
-def get_pe_ev_table(window, freq=dl.FREQ_DAILY):
+def get_pe_ev_table(window, freq=dl.FREQ_DAILY, version=""):
     """Tabla con P/E y EV/EBITDA + comparacion sectorial para todas las empresas."""
-    summary = get_summary(window, freq)
+    summary = get_summary(window, freq, version)
     rows = []
     for _, r in summary.iterrows():
         t = r["ticker"]
@@ -503,7 +523,8 @@ sma_window = st.sidebar.radio("Ventana SMA", [100, 200], index=1, horizontal=Tru
                                     "de ±1.5 desviaciones estándar del cierre.")
 
 info = get_company_info()
-summary = get_summary(sma_window, freq)
+DATA_VERSION = data_version()
+summary = get_summary(sma_window, freq, DATA_VERSION)
 
 all_sectors = sorted(summary["sector"].unique())
 all_universes = sorted(summary["universe"].unique())
@@ -558,7 +579,7 @@ if view == "General":
         maybe_open_empresa(sel1, show)
 
     with tab2:
-        pe_ev_df, sector_pe, sector_pe_n, sector_ev, sector_ev_n = get_pe_ev_table(sma_window, freq)
+        pe_ev_df, sector_pe, sector_pe_n, sector_ev, sector_ev_n = get_pe_ev_table(sma_window, freq, DATA_VERSION)
         pe_ev_filtered = pe_ev_df[pe_ev_df.ticker.isin(filtered.ticker)]
         show2 = pe_ev_filtered.copy()
         show2["PE"] = show2.apply(lambda r: "N/A (pérdidas)" if r.pe_negative else (f"{r.pe:.1f}x" if pd.notna(r.pe) else "—"), axis=1)
@@ -596,7 +617,7 @@ if view == "General":
                    "EV/EBITDA = (Market Cap + Deuda - Caja) / EBITDA del último año fiscal.")
 
     with tab3:
-        pe_ev_df, sector_pe, sector_pe_n, sector_ev, sector_ev_n = get_pe_ev_table(sma_window, freq)
+        pe_ev_df, sector_pe, sector_pe_n, sector_ev, sector_ev_n = get_pe_ev_table(sma_window, freq, DATA_VERSION)
         pe_ev_filtered = pe_ev_df[pe_ev_df.ticker.isin(filtered.ticker)]
         scatter_df = pe_ev_filtered[(pe_ev_filtered.pe_negative == False) & pe_ev_filtered.pe.notna() & pe_ev_filtered.netincome_yoy.notna()].copy()
         scatter_df["pe_capped"] = scatter_df["pe"].clip(upper=120)
@@ -612,7 +633,7 @@ if view == "General":
             st.info("Sin datos suficientes de P/E y crecimiento de utilidad neta para este filtro.")
 
     with tab4:
-        pe_ev_df, sector_pe, sector_pe_n, sector_ev, sector_ev_n = get_pe_ev_table(sma_window, freq)
+        pe_ev_df, sector_pe, sector_pe_n, sector_ev, sector_ev_n = get_pe_ev_table(sma_window, freq, DATA_VERSION)
         sec_rows = []
         for sector in sorted(filtered.sector.unique()):
             tickers_sec = filtered[filtered.sector == sector]
@@ -708,7 +729,7 @@ else:
     if freq == dl.FREQ_WEEKLY:
         chart_type = st.radio("Tipo de gráfico", ["Velas", "Línea"], horizontal=True, key="chart_type")
 
-    df_price = get_price_df(ticker, freq)
+    df_price = get_price_df(ticker, freq, DATA_VERSION)
     if df_price is not None:
         sma, up, down = dl.compute_sma_bands(df_price, sma_window)
         n_disp = 1000 if freq == dl.FREQ_DAILY else 260
@@ -896,7 +917,7 @@ else:
     st.subheader("Fundamental")
     peInfo = dl.compute_pe(ticker, row["close"])
     evInfo = dl.compute_ev_ebitda(ticker, row["close"])
-    pe_ev_df, sector_pe, sector_pe_n, sector_ev, sector_ev_n = get_pe_ev_table(sma_window, freq)
+    pe_ev_df, sector_pe, sector_pe_n, sector_ev, sector_ev_n = get_pe_ev_table(sma_window, freq, DATA_VERSION)
     sector = row["sector"]
 
     fc1, fc2, fc3, fc4 = st.columns(4)
