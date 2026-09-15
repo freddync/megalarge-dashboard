@@ -1,27 +1,30 @@
 name: Actualizar precios
 
-# Objetivo: correr dos veces por dia habil, en HORA DE NUEVA YORK:
-#   12:00 PM NY -> media sesion, con la hora 11:00-12:00 ya cerrada
-#   11:30 PM NY -> bien pasado el cierre, con el dia ya consolidado
+# Objetivo: actualizar los precios CADA HORA durante el dia de mercado en Nueva
+# York (ventana 9:00 a 20:00 NY, de lunes a viernes), y no hacer nada de noche.
 #
-# El cron de GitHub solo entiende UTC y no ajusta por horario de verano, asi que
-# se programan las DOS variantes (EDT = UTC-4, EST = UTC-5) y el primer paso
-# descarta la que no corresponda segun la fecha. De lo contrario el horario se
-# correria una hora dos veces al año.
+# El cron de GitHub solo entiende UTC. En vez de enumerar las variantes de
+# horario de verano/invierno hora por hora, se dispara cada hora en el rango UTC
+# que puede caer dentro de la ventana (13:00-23:00 y 00:00-01:00) y el primer
+# paso decide segun la hora LOCAL de Nueva York. Asi el horario de verano se
+# ajusta solo.
+#
+# Importante: el filtro es por VENTANA, no por una hora exacta. GitHub atrasa los
+# cron cuando hay carga (se han visto atrasos de horas), y un filtro de igualdad
+# descartaria esas corridas por completo.
 on:
   schedule:
-    - cron: "0 16 * * 1-5"    # 12:00 NY en horario de verano (EDT)
-    - cron: "0 17 * * 1-5"    # 12:00 NY en horario de invierno (EST)
-    - cron: "30 3 * * 2-6"    # 23:30 NY (EDT) -> cae al dia siguiente en UTC
-    - cron: "30 4 * * 2-6"    # 23:30 NY (EST) -> cae al dia siguiente en UTC
+    - cron: "0 13-23,0-1 * * *"
   workflow_dispatch:          # permite lanzarlo a mano desde la pestaña Actions
 
 permissions:
   contents: write
 
+# Con corridas cada hora (cada una tarda ~15 min) conviene que la mas reciente
+# reemplace a una anterior que siga colgada, en vez de irse acumulando una cola.
 concurrency:
   group: actualizar-precios
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   precios:
@@ -29,13 +32,15 @@ jobs:
     timeout-minutes: 90
 
     steps:
-      - name: Verificar si esta corrida corresponde
+      - name: Verificar si estamos en horario de mercado
         id: guard
+        env:
+          HORA_DESDE: 9      # ventana en hora local de Nueva York
+          HORA_HASTA: 20
         run: |
-          NY_ZONA=$(TZ=America/New_York date +%Z)      # EDT (verano) o EST (invierno)
-          CRON="${{ github.event.schedule }}"
-          echo "Hora en Nueva York: $(TZ=America/New_York date '+%Y-%m-%d %H:%M %Z')"
-          echo "Cron que disparo:   '${CRON:-(ninguno: ejecucion manual)}'"
+          NY_HORA=$(TZ=America/New_York date +%-H)     # sin cero a la izquierda
+          NY_DIA=$(TZ=America/New_York date +%u)       # 1=lunes ... 7=domingo
+          echo "Hora en Nueva York: $(TZ=America/New_York date '+%Y-%m-%d %H:%M %Z (%a)')"
 
           if [ "${{ github.event_name }}" != "schedule" ]; then
             echo "-> Ejecucion manual: se corre igual."
@@ -43,21 +48,14 @@ jobs:
             exit 0
           fi
 
-          # Cada horario tiene dos crons: uno para cuando NY esta en EDT y otro
-          # para EST. Se decide mirando CUAL cron disparo, no la hora actual:
-          # GitHub puede atrasar los cron varias horas cuando hay carga, y
-          # comparar contra el reloj hacia que se descartara la corrida entera.
-          case "$CRON" in
-            "0 16 * * 1-5"|"30 3 * * 2-6") ESPERADA="EDT" ;;
-            "0 17 * * 1-5"|"30 4 * * 2-6") ESPERADA="EST" ;;
-            *) ESPERADA="$NY_ZONA" ;;                  # cron desconocido: no bloquear
-          esac
-
-          if [ "$NY_ZONA" = "$ESPERADA" ]; then
-            echo "-> Nueva York esta en $NY_ZONA y este cron es la variante correcta: se actualiza."
+          if [ "$NY_DIA" -gt 5 ]; then
+            echo "-> Fin de semana en Nueva York: se omite."
+            echo "correr=no" >> "$GITHUB_OUTPUT"
+          elif [ "$NY_HORA" -ge "$HORA_DESDE" ] && [ "$NY_HORA" -le "$HORA_HASTA" ]; then
+            echo "-> Dentro de la ventana ${HORA_DESDE}:00-${HORA_HASTA}:00 NY: se actualiza."
             echo "correr=si" >> "$GITHUB_OUTPUT"
           else
-            echo "-> Nueva York esta en $NY_ZONA y este cron es la variante $ESPERADA: se omite."
+            echo "-> Fuera de la ventana ${HORA_DESDE}:00-${HORA_HASTA}:00 NY (mercado dormido): se omite."
             echo "correr=no" >> "$GITHUB_OUTPUT"
           fi
 

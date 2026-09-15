@@ -76,20 +76,27 @@ repository from the command line").
 ### Actualización automática de precios (GitHub Actions)
 
 Los precios se actualizan **solos**, sin necesidad de encender el computador. La Action
-`.github/workflows/actualizar-precios.yml` corre **dos veces por día hábil, en hora de
-Nueva York**:
-
-- **12:00 PM NY** — media sesión, con la hora 11:00-12:00 ya cerrada. Captura la **sesión
-  en curso**: el "cierre" de esa última barra es el precio del momento y el volumen está
-  incompleto. El dashboard lo marca explícitamente cuando ocurre.
-- **11:30 PM NY** — bien pasado el cierre, con el día ya consolidado.
+`.github/workflows/actualizar-precios.yml` corre **cada hora, de lunes a viernes, entre las
+9:00 y las 20:00 hora de Nueva York** (12 corridas por día hábil). De noche y los fines de
+semana no hace nada.
 
 Baja los precios de las 894 empresas desde Yahoo, reescribe `data/precios/` y
 `data/precios_semanal/`, y hace commit. Streamlit Cloud detecta el push y redeploya solo.
 
-Nota técnica: el cron de GitHub solo entiende UTC y no ajusta por horario de verano, así
-que están programadas las dos variantes (EDT y EST) y el primer paso del workflow descarta
-la que no corresponde. De lo contrario el horario se correría una hora dos veces al año.
+Durante la sesión (9:30-16:00 NY) la última barra es **parcial**: su "cierre" es el precio
+del momento y el volumen está incompleto. El dashboard lo marca explícitamente. Después del
+cierre la barra queda consolidada y las corridas siguientes ya no la modifican — por eso
+esas corridas terminan sin hacer commit, que es lo esperado.
+
+Dos notas técnicas sobre el cron, ambas aprendidas a golpes:
+
+1. El cron de GitHub solo entiende UTC y no ajusta por horario de verano. Por eso se dispara
+   cada hora en el rango UTC que puede caer en la ventana, y el primer paso del workflow
+   decide según la hora **local de Nueva York**. Así el cambio EDT/EST se ajusta solo.
+2. El filtro es por **ventana horaria, no por una hora exacta**. GitHub atrasa los cron
+   cuando tiene carga (llegamos a ver atrasos de 4 horas), y un filtro de igualdad
+   descartaba las corridas por completo: el workflow aparecía en verde durando 8 segundos
+   y los datos nunca se actualizaban.
 
 - **Lanzarla a mano**: pestaña *Actions* del repo → "Actualizar precios" → *Run workflow*.
 - **Si un ticker falla**, se conserva su CSV anterior (nunca se borra ni se deja a medias).
