@@ -1,22 +1,35 @@
-# Dashboard Integrado — Megacap + Large Cap (SMA100/SMA200)
+# Dashboard Integrado — Megacap + Large Cap
 
 Dashboard técnico + fundamental de 894 empresas (81 Megacap >$200B + 813 Large Cap $10B-$200B),
-con SMA100/SMA200 a elección y bandas ±1.5σ, construido en Streamlit.
+con SMA 100 + banda ±1.5σ, RSI 5 y MACD, construido en Streamlit.
+
+## Indicadores y señales
+
+El dashboard usa **tres indicadores técnicos independientes**. Cada uno aporta su valor
+numérico y su etiqueta, y **cada columna se puede ordenar por separado** en la tabla general:
+
+| Indicador | Columnas | Señal |
+|---|---|---|
+| **SMA 100** con banda ±1.5σ | `Dist. SMA %` y `Zona` | Sobrevendido / Bajista / Alcista / Sobrecomprado |
+| **RSI 5** (límites 80/20) | `RSI 5` y `Señal RSI` | Sobreventa / Neutral / Sobrecompra |
+| **MACD 12/26/9** | `MACD hist %` y `Señal MACD` | Bajista / Perdiendo fuerza / Pre-cruce / Alcista |
+
+Notas de criterio:
+
+- El **RSI de 5 periodos** usa 80/20 en vez del clásico 70/30: con periodo tan corto el
+  indicador cruza 70/30 casi a diario y la señal pierde valor.
+- El RSI se calcula con el suavizado de Wilder **inicializado con media simple** (validado
+  contra el ejemplo canónico del libro de Wilder: 70.46 vs 70.53 publicado).
+- Los cuatro estados del **MACD** salen del signo del histograma y de su pendiente:
+  **Pre-cruce** (negativo pero subiendo) es la señal de compra anticipada, antes de la golden
+  cross; **Perdiendo fuerza** (positivo pero cayendo) es la señal de venta. Al ordenar la
+  columna van de más bajista a más alcista.
+- El histograma se muestra **como % del precio**, para poder comparar empresas de muy
+  distinto valor nominal.
+- Las señales son deliberadamente **independientes**: una empresa puede estar Sobrecomprada
+  por SMA y Neutral por RSI. No se combinan en un puntaje único.
 
 ## Frecuencia: diaria o semanal
-
-El selector de **Frecuencia** en la barra lateral cambia todo el dashboard:
-
-- **Diaria**: cada sesión. La SMA100/200 son de 100/200 días. Gráfico de línea.
-- **Semanal**: barras que cierran el viernes (apertura de la primera sesión, máximo y
-  mínimo de la semana, cierre de la última, volumen sumado). La SMA100/200 pasan a ser
-  de 100/200 **semanas**, y se habilita el gráfico de **velas**.
-
-Los retornos (1m/3m/6m/1a) y el momentum se ajustan solos a la frecuencia, para que sigan
-significando lo mismo en ambos modos.
-
-Las velas solo se ofrecen en semanal: en diario son ~1000 velas en pantalla y la línea de
-cierre se lee mucho mejor.
 
 ## Probarlo en tu computador (opcional, antes de publicarlo)
 

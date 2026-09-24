@@ -162,35 +162,92 @@ def pct_return(series, periods):
     return (b / a - 1) * 100
 
 
-def compute_weekly_momentum(close, step=5):
-    """Compara el ritmo de la última semana contra el promedio de las 3 previas.
+# ---------------------------------------------------------------------------
+# RSI (5 periodos) y MACD (12/26/9)
+# ---------------------------------------------------------------------------
+# Son independientes de la SMA a proposito: cada indicador produce su propia
+# señal y su propia columna ordenable en el dashboard.
 
-    `step` = cuántas barras equivalen a una semana (5 en datos diarios, 1 en semanales),
-    para que la métrica signifique lo mismo en ambas frecuencias.
+RSI_PERIOD = 5
+RSI_SOBRECOMPRA = 80      # con periodo 5 el indicador es muy volatil: 70/30 se
+RSI_SOBREVENTA = 20       # cruzaria casi a diario y la señal perderia valor
+
+MACD_FAST, MACD_SLOW, MACD_SIGNAL = 12, 26, 9
+
+
+def compute_rsi(close, period=RSI_PERIOD):
+    """RSI con suavizado de Wilder, devuelto como Serie.
+
+    Ojo con la inicializacion: Wilder arranca con la MEDIA SIMPLE de los primeros
+    `period` cambios y recien despues aplica el suavizado. Usar directamente
+    ewm(alpha=1/period) de pandas arranca con el primer valor y da un resultado
+    distinto (en el ejemplo canonico del libro de Wilder daba 50.7 en vez de
+    70.5). Con series largas la diferencia se desvanece, pero asi queda correcto
+    para cualquier largo.
     """
-    if len(close) <= 4 * step:
-        return None
-    p = [close.iloc[-1 - i * step] for i in range(5)]
-    if any(pd.isna(x) or x == 0 for x in p):
-        return None
-    w1 = (p[0] / p[1] - 1) * 100
-    w2 = (p[1] / p[2] - 1) * 100
-    w3 = (p[2] / p[3] - 1) * 100
-    w4 = (p[3] / p[4] - 1) * 100
-    avg_prev = (abs(w2) + abs(w3) + abs(w4)) / 3
-    return "Acelerando" if abs(w1) >= avg_prev else "Desacelerando"
+    delta = close.diff()
+    gan = delta.clip(lower=0).to_numpy(dtype=float)
+    per = (-delta.clip(upper=0)).to_numpy(dtype=float)
+    n = len(close)
+
+    avg_g = np.full(n, np.nan)
+    avg_p = np.full(n, np.nan)
+    if n > period:
+        avg_g[period] = np.nanmean(gan[1:period + 1])
+        avg_p[period] = np.nanmean(per[1:period + 1])
+        for i in range(period + 1, n):
+            avg_g[i] = (avg_g[i - 1] * (period - 1) + gan[i]) / period
+            avg_p[i] = (avg_p[i - 1] * (period - 1) + per[i]) / period
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        rs = np.where(avg_p > 0, avg_g / avg_p, np.nan)
+        rsi = 100.0 - 100.0 / (1.0 + rs)
+    # sin perdidas en la ventana -> RSI 100; sin movimiento alguno -> 50 (neutral)
+    sin_perdidas = (avg_p == 0)
+    rsi = np.where(sin_perdidas & (avg_g > 0), 100.0, rsi)
+    rsi = np.where(sin_perdidas & (avg_g == 0), 50.0, rsi)
+    return pd.Series(rsi, index=close.index)
 
 
-def compute_weekly_accel_2w(close, step=5):
-    """Versión corta: última semana contra la semana anterior."""
-    if len(close) <= 2 * step:
-        return None
-    p0, p1, p2 = close.iloc[-1], close.iloc[-1 - step], close.iloc[-1 - 2 * step]
-    if any(pd.isna(x) or x == 0 for x in [p0, p1, p2]):
-        return None
-    w1 = (p0 / p1 - 1) * 100
-    w2 = (p1 / p2 - 1) * 100
-    return "Acelerando" if abs(w1) >= abs(w2) else "Desacelerando"
+def rsi_signal(rsi):
+    """Etiqueta del RSI segun los limites 80/20."""
+    if rsi is None or pd.isna(rsi):
+        return "Sin datos"
+    if rsi >= RSI_SOBRECOMPRA:
+        return "Sobrecompra"
+    if rsi <= RSI_SOBREVENTA:
+        return "Sobreventa"
+    return "Neutral"
+
+
+def compute_macd(close, fast=MACD_FAST, slow=MACD_SLOW, signal=MACD_SIGNAL):
+    """MACD clasico: devuelve (linea MACD, linea de señal, histograma)."""
+    ema_rapida = close.ewm(span=fast, adjust=False).mean()
+    ema_lenta = close.ewm(span=slow, adjust=False).mean()
+    macd = ema_rapida - ema_lenta
+    señal = macd.ewm(span=signal, adjust=False).mean()
+    return macd, señal, macd - señal
+
+
+def macd_signal(hist_actual, hist_previo):
+    """Cuatro estados segun el signo del histograma y hacia donde va.
+
+    El histograma es MACD menos su linea de señal, asi que su signo dice de que
+    lado del cruce estamos y su pendiente dice si el movimiento gana o pierde
+    fuerza:
+
+      Bajista          histograma negativo y cayendo  -> abajo y empeorando
+      Perdiendo fuerza histograma positivo y cayendo  -> SEÑAL DE VENTA
+      Pre-cruce        histograma negativo y subiendo -> SEÑAL DE COMPRA
+                                                         (se acerca la golden cross)
+      Alcista          histograma positivo y subiendo -> tendencia confirmada
+    """
+    if hist_actual is None or pd.isna(hist_actual) or hist_previo is None or pd.isna(hist_previo):
+        return "Sin datos"
+    subiendo = hist_actual >= hist_previo
+    if hist_actual >= 0:
+        return "Alcista" if subiendo else "Perdiendo fuerza"
+    return "Pre-cruce" if subiendo else "Bajista"
 
 
 def zone_signal(close, sma, up, down):
@@ -225,12 +282,13 @@ def short_signal(signal):
 def build_summary(window, company_info, freq=FREQ_DAILY):
     """Resumen tecnico para TODAS las empresas.
 
-    `window` es la SMA (100 o 200) y `freq` define si esas 100/200 barras son
-    días o semanas. Los retornos y el momentum se ajustan a la frecuencia para
-    que sigan significando lo mismo (1 mes, 3 meses, 1 semana, etc.).
+    Calcula TRES indicadores independientes, cada uno con su valor numerico y su
+    etiqueta, para que en el dashboard se puedan ordenar por separado:
+      - SMA `window` con banda +/-1.5 sigma  -> columna "Zona"
+      - RSI de 5 periodos (limites 80/20)    -> columna "Señal RSI"
+      - MACD 12/26/9 (estado del histograma) -> columna "Señal MACD"
     """
     periods = RETURN_PERIODS.get(freq, RETURN_PERIODS[FREQ_DAILY])
-    step = BARS_PER_WEEK.get(freq, 5)
     vol_window = 60 if freq == FREQ_DAILY else 12
 
     rows = []
@@ -238,6 +296,7 @@ def build_summary(window, company_info, freq=FREQ_DAILY):
         df = get_series(ticker, freq)
         if df is None or len(df) < 5:
             continue
+        cierre = df["Close"]
         sma, up, down = compute_sma_bands(df, window)
         last = df.iloc[-1]
         close = float(last["Close"])
@@ -245,6 +304,20 @@ def build_summary(window, company_info, freq=FREQ_DAILY):
         up_last = up.iloc[-1]
         down_last = down.iloc[-1]
         signal, dist_pct, band_pos = zone_signal(close, sma_last, up_last, down_last)
+
+        # --- RSI 5 ---
+        rsi_serie = compute_rsi(cierre)
+        rsi_val = rsi_serie.iloc[-1] if len(rsi_serie) else None
+
+        # --- MACD 12/26/9 ---
+        macd_l, macd_sig, macd_hist = compute_macd(cierre)
+        hist_act = macd_hist.iloc[-1] if len(macd_hist) else None
+        hist_prev = macd_hist.iloc[-2] if len(macd_hist) > 1 else None
+        # el histograma se normaliza por el precio para poder comparar empresas
+        # de muy distinto valor nominal entre si
+        hist_pct = (float(hist_act) / close * 100) if (hist_act is not None
+                                                       and pd.notna(hist_act) and close) else None
+
         info = company_info.get(ticker, {})
         rows.append({
             "ticker": ticker,
@@ -261,12 +334,17 @@ def build_summary(window, company_info, freq=FREQ_DAILY):
             "band_pos": round(float(band_pos), 3) if band_pos is not None else None,
             "signal": signal,
             "zone": short_signal(signal),
-            "r1m": (lambda v: round(v, 2) if v is not None else None)(pct_return(df["Close"], periods["r1m"])),
-            "r3m": (lambda v: round(v, 2) if v is not None else None)(pct_return(df["Close"], periods["r3m"])),
-            "r6m": (lambda v: round(v, 2) if v is not None else None)(pct_return(df["Close"], periods["r6m"])),
-            "r1y": (lambda v: round(v, 2) if v is not None else None)(pct_return(df["Close"], periods["r1y"])),
-            "momentum": compute_weekly_momentum(df["Close"], step),
-            "accel2w": compute_weekly_accel_2w(df["Close"], step),
+            # --- RSI 5 (independiente de la SMA) ---
+            "rsi": round(float(rsi_val), 1) if rsi_val is not None and pd.notna(rsi_val) else None,
+            "rsi_signal": rsi_signal(rsi_val),
+            # --- MACD 12/26/9 (independiente de los otros dos) ---
+            "macd_hist": round(float(hist_act), 4) if hist_act is not None and pd.notna(hist_act) else None,
+            "macd_hist_pct": round(hist_pct, 3) if hist_pct is not None else None,
+            "macd_signal": macd_signal(hist_act, hist_prev),
+            "r1m": (lambda v: round(v, 2) if v is not None else None)(pct_return(cierre, periods["r1m"])),
+            "r3m": (lambda v: round(v, 2) if v is not None else None)(pct_return(cierre, periods["r3m"])),
+            "r6m": (lambda v: round(v, 2) if v is not None else None)(pct_return(cierre, periods["r6m"])),
+            "r1y": (lambda v: round(v, 2) if v is not None else None)(pct_return(cierre, periods["r1y"])),
             "avg_vol_60d": int(v) if pd.notna(v := df["Volume"].tail(vol_window).mean()) else None,
             "n_rows": len(df),
             "first_date": df["Date"].iloc[0].strftime("%Y-%m-%d"),

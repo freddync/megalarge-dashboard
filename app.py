@@ -398,7 +398,7 @@ if st.session_state.pop("_goto_general", False):
 # session_state (claves que NO son de widgets, por lo que sobreviven la navegacion)
 # y ordenamos con pandas antes de dibujar la tabla.
 
-_TEXT_COLS = {"Ticker", "Nombre", "Universo", "Sector", "Zona", "Momentum", "Acel. 2 sem"}
+_TEXT_COLS = {"Ticker", "Nombre", "Universo", "Sector", "Zona", "Señal RSI", "Señal MACD"}
 
 _pending_sort = st.session_state.pop("_pending_sort", None)
 if _pending_sort:
@@ -470,7 +470,16 @@ def handle_header_sort(selection, which):
 # Los valores que no estén en el mapa (ej. "Sin datos") quedan como NaN y se
 # van siempre al final, igual que las celdas vacías de las columnas numéricas.
 ZONE_ORDER = {"Sobrevendido": 0, "Bajista": 1, "Alcista": 2, "Sobrecomprado": 3}
-ORDINAL_COLS = {"Zona": ZONE_ORDER}
+
+# RSI: de sobreventa a sobrecompra, igual criterio que la Zona
+RSI_ORDER = {"Sobreventa": 0, "Neutral": 1, "Sobrecompra": 2}
+
+# MACD: sigue el ciclo del indicador, de lo más bajista a lo más alcista.
+# "Perdiendo fuerza" (histograma positivo pero cayendo) es la señal de venta y
+# "Pre-cruce" (negativo pero subiendo) la de compra anticipada.
+MACD_ORDER = {"Bajista": 0, "Perdiendo fuerza": 1, "Pre-cruce": 2, "Alcista": 3}
+
+ORDINAL_COLS = {"Zona": ZONE_ORDER, "Señal RSI": RSI_ORDER, "Señal MACD": MACD_ORDER}
 
 
 def apply_saved_sort(df, which, colmap):
@@ -517,10 +526,10 @@ freq = st.sidebar.radio("Frecuencia", [dl.FREQ_DAILY, dl.FREQ_WEEKLY], horizonta
                              "última y volumen sumado.")
 
 unidad = "días" if freq == dl.FREQ_DAILY else "semanas"
-sma_window = st.sidebar.radio("Ventana SMA", [100, 200], index=1, horizontal=True,
-                               format_func=lambda w: f"{w} {unidad}",
-                               help=f"SMA de 100 o 200 {unidad} (según la frecuencia elegida), con banda "
-                                    "de ±1.5 desviaciones estándar del cierre.")
+sma_window = 100        # fija: la SMA 100 es la ventana del proyecto
+st.sidebar.caption(f"Indicadores: **SMA {sma_window}** (banda ±1.5σ) · **RSI {dl.RSI_PERIOD}** "
+                   f"({dl.RSI_SOBRECOMPRA}/{dl.RSI_SOBREVENTA}) · "
+                   f"**MACD {dl.MACD_FAST}/{dl.MACD_SLOW}/{dl.MACD_SIGNAL}**")
 
 info = get_company_info()
 DATA_VERSION = data_version()
@@ -552,17 +561,26 @@ st.sidebar.caption(
 if view == "General":
     st.title(f"Resumen general — SMA{sma_window}")
     st.markdown(texto_actualizacion(summary))
-    st.caption(f"{len(filtered)} empresas · Zona = posición del precio respecto a la banda SMA{sma_window}±1.5σ · "
-               "Momentum compara la última semana vs. el promedio de las 3 previas · "
-               "Acel. 2 sem compara solo contra la semana anterior")
+    st.caption(
+        f"{len(filtered)} empresas · Tres señales **independientes**, cada una ordenable por su propia columna: "
+        f"**Zona** = dónde está el precio respecto a la banda SMA{sma_window}±1.5σ · "
+        f"**Señal RSI** = RSI {dl.RSI_PERIOD} sobre {dl.RSI_SOBRECOMPRA} (sobrecompra) o bajo "
+        f"{dl.RSI_SOBREVENTA} (sobreventa) · "
+        f"**Señal MACD** = estado del histograma {dl.MACD_FAST}/{dl.MACD_SLOW}/{dl.MACD_SIGNAL} "
+        "(Pre-cruce = compra anticipada, Perdiendo fuerza = venta)")
 
     tab1, tab2, tab3, tab4 = st.tabs(["Resumen técnico", "Indicadores financieros", "P/E vs. crecimiento", "Resumen por sector"])
 
     with tab1:
+        # Cada indicador aporta su valor numerico y su etiqueta, y ambos son
+        # ordenables por separado: se puede ordenar por "Dist. SMA %" o por
+        # "Zona", por "RSI 5" o por "Señal RSI", etc.
         raw_cols_1 = ["ticker", "name", "universe", "sector", "close", "sma", "dist_sma_pct",
-                      "r1m", "r3m", "r6m", "r1y", "zone", "momentum", "accel2w"]
+                      "zone", "rsi", "rsi_signal", "macd_hist_pct", "macd_signal",
+                      "r1m", "r3m", "r6m", "r1y"]
         disp_cols_1 = ["Ticker", "Nombre", "Universo", "Sector", "Precio", f"SMA{sma_window}", "Dist. SMA %",
-                       "1m %", "3m %", "6m %", "1a %", "Zona", "Momentum", "Acel. 2 sem"]
+                       "Zona", f"RSI {dl.RSI_PERIOD}", "Señal RSI", "MACD hist %", "Señal MACD",
+                       "1m %", "3m %", "6m %", "1a %"]
         colmap_1 = dict(zip(disp_cols_1, raw_cols_1))
 
         show = apply_saved_sort(filtered[raw_cols_1].copy(), "tecnico", colmap_1)
@@ -683,20 +701,30 @@ else:
     c4.metric("Retorno 1a", fmt_pct(row["r1y"]))
     c5.metric("Zona", row["zone"])
 
-    c6, c7 = st.columns(2)
-    c6.metric("Momentum (4 sem)", row["momentum"] or "—")
-    c7.metric("Acel. 2 sem", row["accel2w"] or "—")
+    # las tres señales, cada una con su valor y su lectura
+    s1, s2, s3, s4 = st.columns(4)
+    s1.metric(f"RSI {dl.RSI_PERIOD}", f"{row['rsi']:.1f}" if pd.notna(row.get("rsi")) else "—",
+              help=f"Sobre {dl.RSI_SOBRECOMPRA} = sobrecompra · bajo {dl.RSI_SOBREVENTA} = sobreventa")
+    s2.metric("Señal RSI", row.get("rsi_signal") or "—")
+    s3.metric("MACD hist %", f"{row['macd_hist_pct']:+.3f}%" if pd.notna(row.get("macd_hist_pct")) else "—",
+              help="Histograma (MACD menos su señal) como % del precio, para poder comparar entre empresas")
+    s4.metric("Señal MACD", row.get("macd_signal") or "—",
+              help="Pre-cruce = se acerca la golden cross (compra) · Perdiendo fuerza = pierde momentum (venta)")
 
     # ---- Analisis + recomendacion ----
     margins = dl.compute_margins(ticker)
     reco_label, reco_text = dl.compute_recommendation(row.to_dict(), margins)
     st.subheader("Análisis y recomendación")
-    st.markdown(f"**Lectura técnica:** el precio de {ticker} está {fmt_pct(row['dist_sma_pct'])} respecto a su "
-                f"SMA{sma_window} ({row['sma']:.2f} si hay dato), en zona **{row['zone']}**. "
-                f"Retornos: 1m {fmt_pct(row['r1m'])}, 3m {fmt_pct(row['r3m'])}, 1a {fmt_pct(row['r1y'])}.")
+    st.markdown(
+        f"**Lectura técnica** (las tres señales son independientes entre sí): "
+        f"el precio está {fmt_pct(row['dist_sma_pct'])} respecto a su SMA{sma_window}, en zona "
+        f"**{row['zone']}** · el RSI {dl.RSI_PERIOD} marca "
+        f"{row['rsi']:.1f} → **{row.get('rsi_signal')}**".replace("nan", "—") +
+        f" · el MACD está en **{row.get('macd_signal')}**. "
+        f"Retornos: 1m {fmt_pct(row['r1m'])}, 3m {fmt_pct(row['r3m'])}, 1a {fmt_pct(row['r1y'])}.")
     badge_color = {"Sesgo positivo": "green", "Sesgo negativo": "red", "Neutral / Mantener": "orange"}.get(reco_label, "gray")
     st.markdown(f":{badge_color}[**{reco_label}**]  \n{reco_text}")
-    st.caption("Señal algorítmica combinando técnico (SMA/momentum) y fundamental (crecimiento/margen). "
+    st.caption("Señal algorítmica combinando técnico (SMA) y fundamental (crecimiento/margen). "
                "No constituye asesoría financiera ni recomendación de inversión.")
 
     # ---- Grafico tecnico + panel de opciones (Plotly) ----
@@ -840,6 +868,40 @@ else:
                                width="stretch")
         else:
             st.plotly_chart(fig, width="stretch")
+
+        # ---- RSI y MACD, debajo del precio y compartiendo el mismo eje de tiempo ----
+        rsi_serie = dl.compute_rsi(df_price["Close"]).tail(n_disp)
+        macd_l, macd_s, macd_h = dl.compute_macd(df_price["Close"])
+        macd_l, macd_s, macd_h = macd_l.tail(n_disp), macd_s.tail(n_disp), macd_h.tail(n_disp)
+
+        fig_ind = make_subplots(rows=2, cols=1, shared_xaxes=True,
+                                row_heights=[0.45, 0.55], vertical_spacing=0.08,
+                                subplot_titles=(f"RSI {dl.RSI_PERIOD}",
+                                                f"MACD {dl.MACD_FAST}/{dl.MACD_SLOW}/{dl.MACD_SIGNAL}"))
+
+        fig_ind.add_trace(go.Scatter(x=disp["Date"], y=rsi_serie, line=dict(color="#b98af0", width=1.3),
+                                     name=f"RSI {dl.RSI_PERIOD}"), row=1, col=1)
+        fig_ind.add_hline(y=dl.RSI_SOBRECOMPRA, line=dict(color="#ef5a6f", width=1, dash="dot"),
+                          annotation_text=f"Sobrecompra {dl.RSI_SOBRECOMPRA}",
+                          annotation_font=dict(size=9, color="#ef5a6f"), row=1, col=1)
+        fig_ind.add_hline(y=dl.RSI_SOBREVENTA, line=dict(color="#3ecf8e", width=1, dash="dot"),
+                          annotation_text=f"Sobreventa {dl.RSI_SOBREVENTA}",
+                          annotation_font=dict(size=9, color="#3ecf8e"), row=1, col=1)
+        fig_ind.update_yaxes(range=[0, 100], row=1, col=1)
+
+        hist_colors = ["#3ecf8e" if h >= 0 else "#ef5a6f" for h in macd_h]
+        fig_ind.add_trace(go.Bar(x=disp["Date"], y=macd_h, marker_color=hist_colors,
+                                 name="Histograma"), row=2, col=1)
+        fig_ind.add_trace(go.Scatter(x=disp["Date"], y=macd_l, line=dict(color="#e6e8ec", width=1.2),
+                                     name="MACD"), row=2, col=1)
+        fig_ind.add_trace(go.Scatter(x=disp["Date"], y=macd_s, line=dict(color="#e6b45e", width=1.2, dash="dash"),
+                                     name="Señal"), row=2, col=1)
+        fig_ind.add_hline(y=0, line=dict(color="#2a2f3a", width=1), row=2, col=1)
+
+        fig_ind.update_layout(height=380, template="plotly_dark", plot_bgcolor="#171a21",
+                              paper_bgcolor="#171a21", margin=dict(t=30, b=10), bargap=0.05,
+                              legend=dict(orientation="h", y=-0.12), showlegend=True)
+        st.plotly_chart(fig_ind, width="stretch")
 
         # referencia escrita de cada línea (además de la leyenda del gráfico)
         ref = [
