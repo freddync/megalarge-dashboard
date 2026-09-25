@@ -196,7 +196,7 @@ def get_options(ticker):
     chains = []
     for ch in raw_chains:
         calls, puts, levels = ol.build_levels(spot, ch["dte"], ch["calls"], ch["puts"])
-        if levels.empty:
+        if levels.empty or (levels["call_oi"].sum() + levels["put_oi"].sum()) == 0:
             continue
         chains.append({
             "exp": ch["exp"], "dte": ch["dte"],
@@ -206,6 +206,13 @@ def get_options(ticker):
             "total_gex": ol.total_gex(levels),
             "gamma_flip": ol.gamma_flip(levels),
         })
+    if not chains:
+        diag = "; ".join(
+            f"{ch['exp']}: {0 if ch['calls'] is None else len(ch['calls'])} calls / "
+            f"{0 if ch['puts'] is None else len(ch['puts'])} puts, columnas "
+            f"{sorted(ch['calls'].columns)[:12] if ch['calls'] is not None else '—'}"
+            for ch in raw_chains) or "Yahoo no devolvió vencimientos"
+        return None, f"la cadena llegó vacía o sin Open Interest utilizable ({diag})"
     return {"spot": spot, "avg_vol_5d": avg_vol_5d, "chains": chains}, None
 
 
@@ -244,9 +251,9 @@ def build_week_walls_chart(bars, chain, estados):
     el cierre del día de vencimiento.
     """
     # cierre del día de vencimiento (15:59 para no caer justo en el corte de la noche)
-    exp_dt = pd.Timestamp(chain["exp"]) + pd.Timedelta(hours=15, minutes=59)
     now_dt = bars.index[-1]
-    x_end = max(exp_dt, now_dt + pd.Timedelta(hours=1))
+    exp_dt = (pd.Timestamp(chain["exp"]) + pd.Timedelta(hours=15, minutes=59)) if chain else None
+    x_end = max(exp_dt, now_dt + pd.Timedelta(hours=1)) if chain else now_dt + pd.Timedelta(hours=1)
 
     fig = go.Figure()
     fig.add_trace(go.Candlestick(
@@ -257,7 +264,7 @@ def build_week_walls_chart(bars, chain, estados):
 
     zone = ol.WALL_ZONE_PCT / 100
     y_vals = [bars["Low"].min(), bars["High"].max()]
-    for tag, w in chain_walls(chain):
+    for tag, w in (chain_walls(chain) if chain else []):
         k, color = w["strike"], WALL_STYLE[tag]
         est = estados.get(tag, {}).get("estado", "")
         y_vals.append(k)
@@ -279,14 +286,16 @@ def build_week_walls_chart(bars, chain, estados):
                              name=f"Precio actual {last:,.2f}",
                              hovertemplate=f"Precio actual: {last:,.2f}<extra></extra>"))
 
-    for x, label, color, anchor in ((now_dt, "Hoy", "#e6e8ec", "left"),
-                                    (exp_dt, f"Vence {chain['exp']}", "#e6b45e", "right")):
+    vlines = [(now_dt, "Hoy", "#e6e8ec", "left")]
+    if chain:
+        vlines.append((exp_dt, f"Vence {chain['exp']}", "#e6b45e", "right"))
+    for x, label, color, anchor in vlines:
         fig.add_shape(type="line", x0=x, x1=x, y0=0, y1=1, yref="paper",
                       line=dict(color=color, width=1, dash="dash"))
         fig.add_annotation(x=x, y=1, yref="paper", text=label, showarrow=False,
                            xanchor=anchor, yanchor="top", font=dict(size=10, color=color))
     # zona futura (sin datos todavía) levemente sombreada
-    if exp_dt > now_dt:
+    if chain and exp_dt > now_dt:
         fig.add_shape(type="rect", x0=now_dt, x1=x_end, y0=0, y1=1, yref="paper",
                       fillcolor="#e6b45e", opacity=0.04, line_width=0, layer="below")
 
@@ -967,38 +976,48 @@ else:
     else:
         st.info("Sin historial de precios disponible.")
 
+    # ---- Última semana (velas 1h) vs muros, hasta el vencimiento ----
+    # Se muestra SIEMPRE: si la cadena de opciones no está disponible, igual se ven
+    # las velas de la semana (sin muros) y un aviso con el motivo.
+    chain_sel = None
+    if opt_on and opt_data and opt_data["chains"] and exp_choice:
+        idx = [f"{c['exp']} ({c['dte']}d)" for c in opt_data["chains"]].index(exp_choice)
+        chain_sel = opt_data["chains"][idx]
+    st.subheader("Última semana vs muros" +
+                 (f" (hasta el vencimiento {chain_sel['exp']})" if chain_sel else ""))
+    bars, bars_err = get_intraday(ticker)
+    estados = {}
+    if bars_err or bars is None or bars.empty:
+        st.info(f"No se pudieron cargar las velas horarias de {ticker}: {bars_err or 'sin datos'}")
+    else:
+        if chain_sel is not None:
+            estados = {tag: ol.classify_wall(bars, w["strike"]) for tag, w in chain_walls(chain_sel)}
+        st.plotly_chart(build_week_walls_chart(bars, chain_sel, estados), width="stretch")
+        if chain_sel is None:
+            st.caption("Sin muros: la cadena de opciones no está disponible (ver aviso más abajo).")
+        else:
+            with st.expander("¿Cómo se clasifica cada muro?", expanded=False):
+                z = ol.WALL_ZONE_PCT
+                st.markdown(
+                    f"Se usan las velas de 1 hora de los últimos 5 días hábiles. La franja sombreada "
+                    f"de cada muro es su **zona de contacto** (±{z:g}% del strike).\n\n"
+                    f"- **Rompió ↑/↓**: la semana empezó de un lado del strike y hoy cierra del otro.\n"
+                    f"- **Probando**: tocó la zona y el precio sigue dentro de ella (la pelea está en curso).\n"
+                    f"- **Rebotando**: tocó la zona (incluso perforándola con mecha) y ya se alejó al "
+                    f"menos {z/2:g}% del punto más cercano: el muro funcionó.\n"
+                    f"- **Acercándose**: no lo ha tocado, está a menos de {z*ol.APPROACH_ZONE_MULT:g}% y "
+                    f"la distancia se redujo respecto a hace ~1 sesión.\n"
+                    f"- **Lejos**: ninguna de las anteriores.")
+                st.caption("Limitación: los muros son la foto del Open Interest de HOY. Yahoo no entrega "
+                           "OI histórico, así que no sabemos si el muro ya estaba en ese strike al "
+                           "principio de la semana.")
+
     # ---- Detalle de opciones: GEX, gamma flip y tabla de muros ----
     if opt_on:
         if opt_error:
             st.info(f"No se pudo cargar la cadena de opciones de {ticker}: {opt_error}")
-        elif opt_data and opt_data["chains"] and exp_choice:
-            idx = [f"{c['exp']} ({c['dte']}d)" for c in opt_data["chains"]].index(exp_choice)
-            chain = opt_data["chains"][idx]
-
-            # ---- Última semana vs muros, hasta el vencimiento ----
-            st.subheader(f"Última semana vs muros (hasta el vencimiento {chain['exp']})")
-            bars, bars_err = get_intraday(ticker)
-            estados = {}
-            if bars_err or bars is None or bars.empty:
-                st.info(f"No se pudieron cargar las velas horarias de {ticker}: {bars_err or 'sin datos'}")
-            else:
-                estados = {tag: ol.classify_wall(bars, w["strike"]) for tag, w in chain_walls(chain)}
-                st.plotly_chart(build_week_walls_chart(bars, chain, estados), width="stretch")
-                with st.expander("¿Cómo se clasifica cada muro?", expanded=False):
-                    z = ol.WALL_ZONE_PCT
-                    st.markdown(
-                        f"Se usan las velas de 1 hora de los últimos 5 días hábiles. La franja sombreada "
-                        f"de cada muro es su **zona de contacto** (±{z:g}% del strike).\n\n"
-                        f"- **Rompió ↑/↓**: la semana empezó de un lado del strike y hoy cierra del otro.\n"
-                        f"- **Probando**: tocó la zona y el precio sigue dentro de ella (la pelea está en curso).\n"
-                        f"- **Rebotando**: tocó la zona (incluso perforándola con mecha) y ya se alejó al "
-                        f"menos {z/2:g}% del punto más cercano: el muro funcionó.\n"
-                        f"- **Acercándose**: no lo ha tocado, está a menos de {z*ol.APPROACH_ZONE_MULT:g}% y "
-                        f"la distancia se redujo respecto a hace ~1 sesión.\n"
-                        f"- **Lejos**: ninguna de las anteriores.")
-                    st.caption("Limitación: los muros son la foto del Open Interest de HOY. Yahoo no entrega "
-                               "OI histórico, así que no sabemos si el muro ya estaba en ese strike al "
-                               "principio de la semana.")
+        elif chain_sel is not None:
+            chain = chain_sel
 
             k1, k2, k3, k4 = st.columns(4)
             k1.metric("Spot (opciones)", f"{opt_data['spot']:.2f}")

@@ -141,8 +141,17 @@ def _prep_side(df: pd.DataFrame, spot: float, T: float, is_call: bool) -> pd.Dat
     d = df.copy()
     d["volume"] = d["volume"] if "volume" in d.columns else 0
     d = d[["strike", "openInterest", "impliedVolatility", "volume"]].copy()
-    d = d.dropna(subset=["strike", "openInterest", "impliedVolatility"])
-    d["volume"] = pd.to_numeric(d["volume"], errors="coerce").fillna(0)
+    for c in ["strike", "openInterest", "impliedVolatility", "volume"]:
+        d[c] = pd.to_numeric(d[c], errors="coerce")
+    d = d.dropna(subset=["strike"])
+    # Fuera de horario Yahoo a veces entrega OI vacío en algunos strikes o IV ~0
+    # (sin bid/ask). No se descartan: OI faltante = 0, e IV inválida se reemplaza
+    # por la mediana de las IV válidas del mismo lado (o 30% si no hay ninguna).
+    d["openInterest"] = d["openInterest"].fillna(0)
+    d["volume"] = d["volume"].fillna(0)
+    iv_ok = d["impliedVolatility"].where(d["impliedVolatility"] > 0.01)
+    iv_fill = float(iv_ok.median()) if iv_ok.notna().any() else 0.30
+    d["impliedVolatility"] = iv_ok.fillna(iv_fill)
 
     # ventana operativa +/-25% del spot
     lo, hi = spot * (1 - STRIKE_WINDOW), spot * (1 + STRIKE_WINDOW)
