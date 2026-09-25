@@ -138,9 +138,20 @@ conectada. El flujo para refrescar precios/fundamentales es:
 
 ## Opciones (calls/puts y GEX)
 
-En la vista de cada empresa se eligen uno de los **2 vencimientos más próximos** y se
-muestran sus "muros" (PW2/PW1/CW1/CW2 = los 2 strikes con mayor OI por lado) sobre el
-gráfico de precio, más una sección de detalle con:
+El gráfico de precio principal ya no muestra muros; en cambio permite **dibujar líneas de
+tendencia** (botones de línea, trazo libre, rectángulo y borrar en la barra del gráfico).
+Las líneas no se guardan: se pierden al cambiar de empresa o recargar.
+
+Los muros (PW2/PW1/CW1/CW2 = los 2 strikes con mayor OI por lado) viven en la sección
+"Última semana vs muros de opciones", con su propio selector entre los **2 vencimientos
+más próximos**:
+
+- **Perfil de volumen** a la derecha del gráfico: acciones transadas por nivel de precio
+  durante la semana (el volumen de cada vela se reparte entre su mínimo y su máximo), con
+  las barras dentro de la zona de un muro pintadas de su color y el POC marcado.
+- En la tabla de muros: **% vol. semana en zona** (qué parte del volumen de la semana se
+  transó en la zona del muro) y **Contratos hoy / OI** (rotación del muro hoy). Yahoo no
+  entrega OI histórico, así que no se puede medir directamente cuántos contratos se cerraron.
 
 - **Gráfico "Última semana vs muros"**: velas de **1 hora** de los últimos 5 días hábiles,
   con cada muro y su zona de contacto (±1.5% del strike) extendidos **hasta el cierre del

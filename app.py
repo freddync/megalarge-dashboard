@@ -227,6 +227,11 @@ def get_intraday(ticker):
         return None, f"{type(e).__name__}: {e}"
 
 
+DRAW_CONFIG = {
+    "displaylogo": False,
+    "modeBarButtonsToAdd": ["drawline", "drawopenpath", "drawrect", "eraseshape"],
+}
+
 WALL_STYLE = {"CW1": "#3ecf8e", "CW2": "#6de08c", "PW1": "#ef5a6f", "PW2": "#f0a8b0"}
 ESTADO_COLOR = {"Rebotando": "#3ecf8e", "Probando": "#e6b45e", "Acercándose": "#5ea8e6",
                 "Rompió ↑": "#ef5a6f", "Rompió ↓": "#ef5a6f", "Lejos": "#8b93a3"}
@@ -243,70 +248,123 @@ def chain_walls(chain):
     return out
 
 
-def build_week_walls_chart(bars, chain, estados):
-    """Velas de 1 hora de la última semana + muros extendidos hasta el vencimiento.
+def wall_consumption(bars, chain):
+    """Por muro, dos lecturas de "cuánto se ha trabajado" ese nivel:
+
+    - pct_semana: % del volumen de ACCIONES de la semana que se transó dentro de la
+      zona del muro. Alto = el mercado pasó mucho tiempo/volumen ahí (nivel aceptado
+      o muy disputado); bajo = el precio casi no lo visitó o lo rechazó rápido.
+    - rot_hoy: volumen de CONTRATOS de hoy en ese strike ÷ Open Interest. Es lo más
+      cercano a "cuántos contratos se movieron" que entrega Yahoo (solo el día actual,
+      y no distingue aperturas de cierres).
+    """
+    out = {}
+    total = float(bars["Volume"].fillna(0).sum())
+    for tag, w in (chain_walls(chain) if chain else []):
+        vz = ol.zone_volume(bars, w["strike"])
+        out[tag] = {"vol_zona": vz,
+                    "pct_semana": (vz / total * 100) if total else None,
+                    "rot_hoy": (w["volume"] / w["oi"] * 100) if w.get("oi") else None}
+    return out
+
+
+def build_week_walls_chart(bars, chain, estados, consumo=None):
+    """Velas de 1 hora de la última semana + muros extendidos hasta el vencimiento,
+    con el perfil de volumen de la semana a la derecha (mismo eje de precios).
 
     El eje X salta noches y fines de semana (rangebreaks), así que el espacio en
     blanco a la derecha es proporcional a las horas de mercado que quedan hasta
     el cierre del día de vencimiento.
     """
-    # cierre del día de vencimiento (15:59 para no caer justo en el corte de la noche)
+    consumo = consumo or {}
     now_dt = bars.index[-1]
+    # cierre del día de vencimiento (15:59 para no caer justo en el corte de la noche)
     exp_dt = (pd.Timestamp(chain["exp"]) + pd.Timedelta(hours=15, minutes=59)) if chain else None
     x_end = max(exp_dt, now_dt + pd.Timedelta(hours=1)) if chain else now_dt + pd.Timedelta(hours=1)
 
-    fig = go.Figure()
+    fig = make_subplots(rows=1, cols=2, shared_yaxes=True, column_widths=[0.83, 0.17],
+                        horizontal_spacing=0.008)
     fig.add_trace(go.Candlestick(
         x=bars.index, open=bars["Open"], high=bars["High"], low=bars["Low"], close=bars["Close"],
         increasing_line_color="#3ecf8e", decreasing_line_color="#ef5a6f",
         increasing_fillcolor="#3ecf8e", decreasing_fillcolor="#ef5a6f",
-        name="Velas 1h", showlegend=False))
+        name="Velas 1h", showlegend=False), row=1, col=1)
 
     zone = ol.WALL_ZONE_PCT / 100
-    y_vals = [bars["Low"].min(), bars["High"].max()]
-    for tag, w in (chain_walls(chain) if chain else []):
+    walls = chain_walls(chain) if chain else []
+    y_vals = [bars["Low"].min(), bars["High"].max()] + [w["strike"] for _, w in walls]
+    lo, hi = min(y_vals), max(y_vals)
+    pad = (hi - lo) * 0.06 or hi * 0.01
+    y_range = [lo - pad, hi + pad]
+
+    # perfil de volumen: gris, y del color del muro dentro de su zona de contacto
+    prof = ol.volume_profile(bars, y_range[0], y_range[1], n_bins=70)
+    colors = []
+    for p_ in prof["price"]:
+        c = "rgba(139,147,163,0.55)"
+        for tag, w in walls:
+            if w["strike"] * (1 - zone) <= p_ <= w["strike"] * (1 + zone):
+                c = WALL_STYLE[tag]
+        colors.append(c)
+    fig.add_trace(go.Bar(
+        x=prof["volume"], y=prof["price"], orientation="h", marker_color=colors,
+        width=float(prof["hi"].iloc[0] - prof["lo"].iloc[0]) * 0.9, name="Perfil de volumen",
+        showlegend=False,
+        hovertemplate="Precio %{y:,.2f}<br>Acciones: %{x:,.0f}<extra>Perfil de volumen</extra>"),
+        row=1, col=2)
+    poc = prof.loc[prof["volume"].idxmax(), "price"] if prof["volume"].sum() else None
+
+    for tag, w in walls:
         k, color = w["strike"], WALL_STYLE[tag]
         est = estados.get(tag, {}).get("estado", "")
-        y_vals.append(k)
+        c = consumo.get(tag, {}).get("pct_semana")
+        c_txt = f" · {c:.0f}% del vol." if c is not None else ""
         # zona de contacto sombreada (±WALL_ZONE_PCT) y línea del strike
         fig.add_shape(type="rect", x0=bars.index[0], x1=x_end, y0=k * (1 - zone), y1=k * (1 + zone),
-                      fillcolor=color, opacity=0.07, line_width=0, layer="below")
+                      fillcolor=color, opacity=0.07, line_width=0, layer="below", row=1, col=1)
         fig.add_trace(go.Scatter(
             x=[bars.index[0], x_end], y=[k, k], mode="lines",
             line=dict(color=color, width=1.4, dash="dot"),
-            name=f"{tag} {k:,.2f} · {est} · OI {ol.fmt_qty(w['oi'])}",
-            hovertemplate=f"{tag}: {k:,.2f}<br>{est}<extra></extra>"))
-        fig.add_annotation(x=x_end, y=k, text=f"{tag} {k:,.2f} · {est}", showarrow=False,
+            name=f"{tag} {k:,.2f} · {est} · OI {ol.fmt_qty(w['oi'])}{c_txt}",
+            hovertemplate=f"{tag}: {k:,.2f}<br>{est}{c_txt}<extra></extra>"), row=1, col=1)
+        fig.add_hline(y=k, line=dict(color=color, width=1, dash="dot"), row=1, col=2)
+        fig.add_annotation(x=x_end, y=k, text=f"{tag} {k:,.2f} · {est}{c_txt}", showarrow=False,
                            xanchor="right", yanchor="bottom", xshift=-4, font=dict(size=10, color=color),
-                           bgcolor="rgba(23,26,33,0.7)")
+                           bgcolor="rgba(23,26,33,0.7)", row=1, col=1)
 
     last = float(bars["Close"].iloc[-1])
     fig.add_trace(go.Scatter(x=[now_dt, x_end], y=[last, last], mode="lines",
                              line=dict(color="#e6e8ec", width=1, dash="dashdot"),
                              name=f"Precio actual {last:,.2f}",
-                             hovertemplate=f"Precio actual: {last:,.2f}<extra></extra>"))
+                             hovertemplate=f"Precio actual: {last:,.2f}<extra></extra>"), row=1, col=1)
+    if poc is not None:
+        fig.add_annotation(x=1, xref="x2 domain", y=poc, yref="y2", text=f"POC {poc:,.2f}", showarrow=False,
+                           xanchor="right", yanchor="bottom", font=dict(size=9, color="#e6e8ec"))
 
-    vlines = [(now_dt, "Hoy", "#e6e8ec", "left")]
+    # "Hoy" arriba y "Vence" abajo, para que no se tapen con las etiquetas de los muros
+    vlines = [(now_dt, "Hoy", "#e6e8ec", "left", 1, "top")]
     if chain:
-        vlines.append((exp_dt, f"Vence {chain['exp']}", "#e6b45e", "right"))
-    for x, label, color, anchor in vlines:
-        fig.add_shape(type="line", x0=x, x1=x, y0=0, y1=1, yref="paper",
+        vlines.append((exp_dt, f"Vence {chain['exp']}", "#e6b45e", "right", 0, "bottom"))
+    for x, label, color, anchor, ypos, yanch in vlines:
+        fig.add_shape(type="line", x0=x, x1=x, y0=0, y1=1, xref="x", yref="y domain",
                       line=dict(color=color, width=1, dash="dash"))
-        fig.add_annotation(x=x, y=1, yref="paper", text=label, showarrow=False,
-                           xanchor=anchor, yanchor="top", font=dict(size=10, color=color))
+        fig.add_annotation(x=x, xref="x", y=ypos, yref="y domain", text=label, showarrow=False,
+                           xanchor=anchor, yanchor=yanch, xshift=3 if anchor == "left" else -3,
+                           font=dict(size=10, color=color))
     # zona futura (sin datos todavía) levemente sombreada
     if chain and exp_dt > now_dt:
-        fig.add_shape(type="rect", x0=now_dt, x1=x_end, y0=0, y1=1, yref="paper",
+        fig.add_shape(type="rect", x0=now_dt, x1=x_end, y0=0, y1=1, xref="x", yref="y domain",
                       fillcolor="#e6b45e", opacity=0.04, line_width=0, layer="below")
 
-    lo, hi = min(y_vals), max(y_vals)
-    pad = (hi - lo) * 0.06 or hi * 0.01
-    fig.update_yaxes(range=[lo - pad, hi + pad])
+    fig.update_yaxes(range=y_range)
     fig.update_xaxes(range=[bars.index[0] - pd.Timedelta(minutes=30), x_end],
                      rangeslider_visible=False,
-                     rangebreaks=[dict(bounds=["sat", "mon"]), dict(bounds=[16, 9.5], pattern="hour")])
-    fig.update_layout(height=460, template="plotly_dark", plot_bgcolor="#171a21",
-                      paper_bgcolor="#171a21", margin=dict(t=10, b=10),
+                     rangebreaks=[dict(bounds=["sat", "mon"]), dict(bounds=[16, 9.5], pattern="hour")],
+                     row=1, col=1)
+    fig.update_xaxes(showticklabels=False, showgrid=False, zeroline=False, row=1, col=2)
+    fig.update_layout(height=500, template="plotly_dark", plot_bgcolor="#171a21",
+                      paper_bgcolor="#171a21", margin=dict(t=10, b=10), bargap=0,
+                      newshape=dict(line=dict(color="#e6b45e", width=2)),
                       legend=dict(orientation="h", x=0, y=-0.08, xanchor="left", yanchor="top",
                                   font=dict(size=10.5)))
     return fig
@@ -784,26 +842,6 @@ else:
     # ---- Grafico tecnico + panel de opciones (Plotly) ----
     st.subheader("Técnico")
 
-    opt_on = st.checkbox("Mostrar opciones (calls/puts y GEX de los 2 vencimientos más próximos)",
-                         value=True, key="opt_on",
-                         help="Descarga la cadena de opciones desde Yahoo vía yfinance. "
-                              "Requiere internet (funciona en tu computador y en Streamlit Cloud).")
-
-    opt_data, opt_error = (None, None)
-    if opt_on:
-        opt_data, opt_error = get_options(ticker)
-
-    # selector de vencimiento (define qué muros se usan en ambos gráficos)
-    exp_choice = None
-    if opt_data and opt_data["chains"]:
-        oc1, oc3 = st.columns([4, 1])
-        exp_labels = [f"{c['exp']} ({c['dte']}d)" for c in opt_data["chains"]]
-        exp_choice = oc1.radio("Vencimiento", exp_labels, horizontal=True, key="opt_exp")
-        if oc3.button("↻ Actualizar", help="Vuelve a descargar opciones y velas horarias (se cachean 15 min)"):
-            get_options.clear()
-            get_intraday.clear()
-            st.rerun()
-
     # tipo de gráfico: las velas solo se ofrecen en semanal (en diario, ~1000 velas
     # quedan ilegibles y la línea de cierre se lee mucho mejor)
     chart_type = "Línea"
@@ -854,48 +892,12 @@ else:
                              name="Volumen", showlegend=False), row=2, col=1)
         fig.update_yaxes(title_text="Volumen", row=2, col=1)
 
-        chain = None
-        if opt_data and opt_data["chains"] and exp_choice:
-            idx = [f"{c['exp']} ({c['dte']}d)" for c in opt_data["chains"]].index(exp_choice)
-            chain = opt_data["chains"][idx]
-
-        # rango del eje Y compartido entre el precio y el panel de opciones, para
-        # que los niveles de strike queden alineados horizontalmente
         y_lo = float(min(disp["Close"].min(), down_d.min() if pd.notna(down_d.min()) else disp["Close"].min()))
         y_hi = float(max(disp["Close"].max(), up_d.max() if pd.notna(up_d.max()) else disp["Close"].max()))
-        if chain is not None and not chain["levels"].empty:
-            y_lo = min(y_lo, float(chain["levels"]["strike"].min()))
-            y_hi = max(y_hi, float(chain["levels"]["strike"].max()))
         pad = (y_hi - y_lo) * 0.04
         y_range = [y_lo - pad, y_hi + pad]
 
-        # Muros de opciones como niveles horizontales. Se dibujan como trazos (no
-        # como shapes) para que aparezcan en la leyenda: así queda explícito qué
-        # significa cada línea, y el nombre lleva el valor numérico del strike.
-        if chain is not None:
-            x0, x1 = disp["Date"].iloc[0], disp["Date"].iloc[-1]
-            walls = (
-                list(zip(chain["call_walls"], ["#3ecf8e", "#6de08c"],
-                         ["CW1", "CW2"], ["Resistencia (call wall)", "Resistencia 2"])) +
-                list(zip(chain["put_walls"], ["#ef5a6f", "#f0a8b0"],
-                         ["PW1", "PW2"], ["Soporte (put wall)", "Soporte 2"]))
-            )
-            for w, color, tag, meaning in walls:
-                dist = (w["strike"] / last_close - 1) * 100
-                fig.add_trace(go.Scatter(
-                    x=[x0, x1], y=[w["strike"], w["strike"]], mode="lines",
-                    line=dict(color=color, width=1.2, dash="dot"),
-                    name=f"{tag} · {meaning}: {w['strike']:,.2f} ({fmt_pct(dist)} vs precio) · OI {ol.fmt_qty(w['oi'])}",
-                    hovertemplate=f"{tag} — {meaning}<br>Strike: {w['strike']:,.2f}<br>"
-                                  f"OI: {ol.fmt_qty(w['oi'])}<br>Dist. al precio: {fmt_pct(dist)}<extra></extra>",
-                ), row=1, col=1)
-                # etiqueta con el valor pegada a la línea, dentro del gráfico
-                fig.add_annotation(x=x1, y=w["strike"], text=f"{tag} {w['strike']:,.2f}",
-                                   showarrow=False, xanchor="right", yanchor="bottom",
-                                   font=dict(size=10, color=color),
-                                   bgcolor="rgba(23,26,33,0.7)", row=1, col=1)
-
-        # línea del último cierre, como referencia para leer los muros
+        # línea del último cierre, como referencia
         fig.add_trace(go.Scatter(
             x=[disp["Date"].iloc[0], disp["Date"].iloc[-1]], y=[last_close, last_close],
             mode="lines", line=dict(color="#8b93a3", width=1, dash="dashdot"),
@@ -903,10 +905,10 @@ else:
             hovertemplate=f"Último cierre: {last_close:,.2f}<extra></extra>",
         ), row=1, col=1)
 
-        # leyenda vertical dentro del gráfico: con los muros son hasta 8 entradas y
-        # los nombres son largos (llevan el valor), así que en horizontal no caben
+        # leyenda vertical dentro del gráfico (los nombres llevan el valor)
         fig.update_layout(height=CHART_HEIGHT, template="plotly_dark", plot_bgcolor="#171a21",
                           paper_bgcolor="#171a21", margin=dict(t=10, b=10), bargap=0.05,
+                          newshape=dict(line=dict(color="#e6b45e", width=2)),
                           legend=dict(orientation="v", x=0.005, y=0.995,
                                       xanchor="left", yanchor="top",
                                       bgcolor="rgba(15,17,21,0.75)",
@@ -914,7 +916,11 @@ else:
                                       font=dict(size=10.5)))
         fig.update_yaxes(range=y_range, row=1, col=1)
 
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig, width="stretch", config=DRAW_CONFIG)
+        st.caption("✏️ Para dibujar líneas de tendencia usa los botones de la barra del gráfico "
+                   "(arriba a la derecha): línea, trazo libre, rectángulo y borrar. Para borrar una "
+                   "línea, haz click sobre ella y luego en el botón de borrar. Las líneas no se "
+                   "guardan: se pierden al cambiar de empresa, de frecuencia o al recargar.")
 
         # ---- RSI y MACD, debajo del precio y compartiendo el mismo eje de tiempo ----
         rsi_serie = dl.compute_rsi(df_price["Close"]).tail(n_disp)
@@ -960,39 +966,46 @@ else:
             f"Rango actual: **{f'{down_now:,.2f} – {up_now:,.2f}' if pd.notna(up_now) else 'sin dato'}**.",
             f"**Último cierre** (gris rayado): línea horizontal de referencia en **{last_close:,.2f}**.",
         ]
-        if chain is not None:
-            for w, _c, tag, meaning in walls:
-                dist = (w["strike"] / last_close - 1) * 100
-                ref.append(f"**{tag}** ({'verde' if tag.startswith('CW') else 'rojo'} punteado): "
-                           f"{meaning.lower()} en **{w['strike']:,.2f}** "
-                           f"({fmt_pct(dist)} respecto al precio), con {ol.fmt_qty(w['oi'])} de Open Interest.")
         with st.expander("¿Qué significa cada línea del gráfico?", expanded=False):
             for line in ref:
                 st.markdown(f"- {line}")
-            if chain is not None:
-                st.caption(f"Los muros corresponden al vencimiento {chain['exp']} ({chain['dte']} días). "
-                           "Son los 2 strikes con mayor Open Interest por lado: suelen actuar como "
-                           "zonas de soporte (puts) y resistencia (calls).")
     else:
         st.info("Sin historial de precios disponible.")
 
     # ---- Última semana (velas 1h) vs muros, hasta el vencimiento ----
     # Se muestra SIEMPRE: si la cadena de opciones no está disponible, igual se ven
     # las velas de la semana (sin muros) y un aviso con el motivo.
+    st.subheader("Última semana vs muros de opciones")
+    opt_on = st.checkbox("Mostrar muros de opciones (2 vencimientos más próximos)",
+                         value=True, key="opt_on",
+                         help="Descarga la cadena de opciones desde Yahoo vía yfinance (en vivo).")
+    opt_data, opt_error = (None, None)
+    if opt_on:
+        opt_data, opt_error = get_options(ticker)
+
     chain_sel = None
-    if opt_on and opt_data and opt_data["chains"] and exp_choice:
-        idx = [f"{c['exp']} ({c['dte']}d)" for c in opt_data["chains"]].index(exp_choice)
-        chain_sel = opt_data["chains"][idx]
-    st.subheader("Última semana vs muros" +
-                 (f" (hasta el vencimiento {chain_sel['exp']})" if chain_sel else ""))
+    oc1, oc3 = st.columns([4, 1])
+    if opt_data and opt_data["chains"]:
+        exp_labels = [f"{c['exp']} ({c['dte']}d)" for c in opt_data["chains"]]
+        exp_choice = oc1.radio("Vencimiento de los muros", exp_labels, horizontal=True, key="opt_exp")
+        chain_sel = opt_data["chains"][exp_labels.index(exp_choice)]
+    if oc3.button("↻ Actualizar", help="Vuelve a descargar opciones y velas horarias (se cachean 15 min)"):
+        get_options.clear()
+        get_intraday.clear()
+        st.rerun()
     bars, bars_err = get_intraday(ticker)
-    estados = {}
+    estados, consumo = {}, {}
     if bars_err or bars is None or bars.empty:
         st.info(f"No se pudieron cargar las velas horarias de {ticker}: {bars_err or 'sin datos'}")
     else:
         if chain_sel is not None:
             estados = {tag: ol.classify_wall(bars, w["strike"]) for tag, w in chain_walls(chain_sel)}
-        st.plotly_chart(build_week_walls_chart(bars, chain_sel, estados), width="stretch")
+            consumo = wall_consumption(bars, chain_sel)
+        st.plotly_chart(build_week_walls_chart(bars, chain_sel, estados, consumo), width="stretch",
+                        config=DRAW_CONFIG)
+        st.caption("A la derecha, **perfil de volumen** de la semana: acciones transadas en cada nivel de "
+                   "precio (el volumen de cada vela se reparte entre su mínimo y su máximo). Las barras de "
+                   "color caen dentro de la zona de un muro. **POC** = nivel con más volumen.")
         if chain_sel is None:
             st.caption("Sin muros: la cadena de opciones no está disponible (ver aviso más abajo).")
         else:
@@ -1039,6 +1052,11 @@ else:
                     "Strike": f"{w['strike']:g}",
                     "Comportamiento": est.get("estado", "—"),
                     "Detalle (última semana)": est.get("detalle", ""),
+                    "Acciones en zona (sem.)": ol.fmt_qty(consumo.get(tag, {}).get("vol_zona")),
+                    "% vol. semana en zona": (f"{consumo[tag]['pct_semana']:.1f}%"
+                                              if consumo.get(tag, {}).get("pct_semana") is not None else "—"),
+                    "Contratos hoy / OI": (f"{consumo[tag]['rot_hoy']:.0f}%"
+                                           if consumo.get(tag, {}).get("rot_hoy") is not None else "—"),
                     "vs Spot": fmt_pct((w["strike"] / opt_data["spot"] - 1) * 100),
                     "OI": ol.fmt_qty(w["oi"]),
                     "Volumen": ol.fmt_qty(w["volume"]),
@@ -1060,6 +1078,13 @@ else:
                            "Δ y Γ se calculan con Black-Scholes (r=4.5%) sobre la volatilidad implícita, porque "
                            "Yahoo no entrega griegas. El GEX asume la convención estándar: dealers largos en "
                            "calls y cortos en puts.")
+                st.caption(f"**% vol. semana en zona** = parte del volumen de acciones de la semana que se "
+                           f"transó dentro de la zona del muro (±{ol.WALL_ZONE_PCT:g}% del strike): mucho "
+                           "volumen ahí = nivel muy trabajado/aceptado; poco = el precio no llegó o lo "
+                           "rechazó rápido. **Contratos hoy / OI** = contratos transados HOY en ese strike "
+                           "÷ Open Interest: mide cuánto se está rotando el muro. Yahoo no entrega OI "
+                           "histórico ni separa aperturas de cierres, así que no se puede saber con "
+                           "certeza cuántos contratos del muro se cerraron durante la semana.")
         elif opt_data:
             st.info(f"{ticker} no tiene cadena de opciones disponible.")
 

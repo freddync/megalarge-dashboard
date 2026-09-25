@@ -379,3 +379,40 @@ def classify_wall(bars: pd.DataFrame, strike: float, zone_pct: float = WALL_ZONE
 
     return {"estado": "Lejos", "dist": dist_now, "min_dist": min_dist,
             "detalle": f"a {abs_now:.1f}% del muro"}
+
+
+# ---------------------------------------------------------------------------
+# Perfil de volumen (volumen de ACCIONES por nivel de precio) y consumo de muros
+# ---------------------------------------------------------------------------
+
+def _spread_volume(bars: pd.DataFrame, edges: np.ndarray) -> np.ndarray:
+    """Reparte el volumen de cada vela uniformemente entre su mínimo y su máximo,
+    acumulándolo en los tramos de precio definidos por `edges`."""
+    out = np.zeros(len(edges) - 1)
+    lows = bars["Low"].astype(float).values
+    highs = bars["High"].astype(float).values
+    vols = bars["Volume"].fillna(0).astype(float).values
+    for lo, hi, v in zip(lows, highs, vols):
+        if not v or not np.isfinite(lo) or not np.isfinite(hi):
+            continue
+        if hi <= lo:  # vela sin rango: todo el volumen en su tramo
+            i = np.clip(np.searchsorted(edges, lo, side="right") - 1, 0, len(out) - 1)
+            out[i] += v
+            continue
+        overlap = np.clip(np.minimum(edges[1:], hi) - np.maximum(edges[:-1], lo), 0, None)
+        out += v * overlap / (hi - lo)
+    return out
+
+
+def volume_profile(bars: pd.DataFrame, y_lo: float, y_hi: float, n_bins: int = 60) -> pd.DataFrame:
+    """Perfil de volumen de la semana: columnas price (centro del tramo), lo, hi, volume."""
+    edges = np.linspace(y_lo, y_hi, n_bins + 1)
+    vol = _spread_volume(bars, edges)
+    return pd.DataFrame({"lo": edges[:-1], "hi": edges[1:],
+                         "price": (edges[:-1] + edges[1:]) / 2, "volume": vol})
+
+
+def zone_volume(bars: pd.DataFrame, strike: float, zone_pct: float = WALL_ZONE_PCT) -> float:
+    """Acciones transadas durante la semana dentro de la zona ±zone_pct% del strike."""
+    z = zone_pct / 100
+    return float(_spread_volume(bars, np.array([strike * (1 - z), strike * (1 + z)]))[0])
