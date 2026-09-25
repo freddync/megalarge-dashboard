@@ -1,0 +1,23 @@
+{
+ "utc": "2026-09-25T02:09:59+00:00",
+ "fechas_sesion": [
+  "2026-09-24"
+ ],
+ "tickers_ok": 67,
+ "tickers_fallidos": [
+  "APH",
+  "AZN",
+  "BHP",
+  "BRK-A",
+  "CCZ",
+  "GOOGM",
+  "GOOGN",
+  "LIN",
+  "MUFG",
+  "NVS",
+  "RY",
+  "SAN",
+  "TD",
+  "TM"
+ ]
+}
