@@ -14,6 +14,9 @@ Uso:
        de este proyecto Streamlit con lo ultimo que haya en esas carpetas.
     3) git add -A && git commit -m "actualizar datos" && git push
        (Streamlit Community Cloud redeploya solo al detectar el push)
+
+    Por defecto solo copia fundamentales y company_info.json; con --todo
+    reconstruye también los precios (pisa los de la GitHub Action).
 """
 
 import os
@@ -178,13 +181,16 @@ def rebuild_fundamentals(tickers):
 
 
 if __name__ == "__main__":
+    # Por defecto SOLO fundamentales (+ company_info): los precios los actualiza la
+    # GitHub Action cada hora y son más frescos que las copias locales de
+    # MegaCap/LargeCap. Para reconstruir también precios: python update_data.py --todo
+    todo = "--todo" in sys.argv
     check_sources()
     os.makedirs(DATA_DIR, exist_ok=True)
     tickers = rebuild_company_info()
-    n_ok = rebuild_prices(tickers)
     rebuild_fundamentals(tickers)
-    escribir_sello(n_ok)
-    print("\nListo. Ahora sube los cambios con git:")
-    print("  git add -A")
-    print('  git commit -m "actualizar datos"')
-    print("  git push")
+    if todo:
+        n_ok = rebuild_prices(tickers)
+        escribir_sello(n_ok)
+    else:
+        print("precios: no se tocan (los actualiza la GitHub Action). Usa --todo para reconstruirlos.")

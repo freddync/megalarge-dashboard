@@ -120,21 +120,16 @@ Dos notas técnicas sobre el cron, ambas aprendidas a golpes:
 Los **fundamentales no** se actualizan por esta vía (cambian cada trimestre): para esos
 sigue el flujo manual de abajo.
 
-### Actualizar los datos a mano (fundamentales, o si prefieres control total)
+### Actualizar los fundamentales (a mano, cada trimestre)
 
-Streamlit Cloud redeploya automáticamente cada vez que detecta un push nuevo a la rama
-conectada. El flujo para refrescar precios/fundamentales es:
+1. `Fintual/MegaCap/Actualizar_Financieros.bat` (81 Megacap).
+2. `Fintual/LargeCap/Actualizar_Financieros_LargeCap.bat` (813 Large Cap, 30-40 min).
+3. `Actualizar_Datos_Dashboard.bat` en esta carpeta: copia los fundamentales a `/data`,
+   hace commit y push. Streamlit Cloud se actualiza solo en 1-2 minutos.
 
-1. Corre los `.bat` de actualización de `Fintual/MegaCap/` y `Fintual/LargeCap/` como siempre
-   (para que esas carpetas tengan los datos más recientes).
-2. Corre `Actualizar_Datos_Dashboard.bat` en esta carpeta (reconstruye `/data` con lo último).
-3. En la consola, dentro de esta carpeta:
-   ```
-   git add -A
-   git commit -m "actualizar datos"
-   git push
-   ```
-4. En 1-2 minutos Streamlit Cloud detecta el push y redeploya solo, sin que tengas que hacer nada más ahí.
+Los **precios no se tocan** en este flujo (los actualiza la Action cada hora y son más
+frescos que las copias locales). Si alguna vez necesitas reconstruirlos desde las
+carpetas locales: `python update_data.py --todo`.
 
 ## Opciones (calls/puts y GEX)
 
