@@ -216,6 +216,18 @@ def get_options(ticker):
     return {"spot": spot, "avg_vol_5d": avg_vol_5d, "chains": chains}, None
 
 
+MEGACAP = "Megacap (>$200B)"
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_oi_hist(ticker):
+    """Fotos diarias de OI guardadas por la Action (solo Megacap)."""
+    try:
+        return ol.load_oi_hist(ticker)
+    except Exception:
+        return None
+
+
 @st.cache_data(ttl=900, show_spinner="Descargando velas horarias...")
 def get_intraday(ticker):
     """Velas de 1 hora de la última semana. Devuelve (df, error). Cache 15 min."""
@@ -1042,6 +1054,10 @@ else:
             k4.metric("Gamma flip", f"{flip:.2f}" if flip else "—",
                       help="Strike donde el GEX acumulado cambia de signo.")
 
+            oi_hist = get_oi_hist(ticker) if row["universe"] == MEGACAP else None
+            oi_evo = {tag: ol.wall_oi_history(oi_hist, chain["exp"], "C" if tag.startswith("CW") else "P",
+                                              w["strike"], w["oi"])
+                      for tag, w in chain_walls(chain)}
             walls_rows = []
             wall_labels = {"CW2": "CW2 (resist. 2)", "CW1": "CW1 (resist. 1)",
                            "PW1": "PW1 (soporte 1)", "PW2": "PW2 (soporte 2)"}
@@ -1059,6 +1075,11 @@ else:
                                            if consumo.get(tag, {}).get("rot_hoy") is not None else "—"),
                     "vs Spot": fmt_pct((w["strike"] / opt_data["spot"] - 1) * 100),
                     "OI": ol.fmt_qty(w["oi"]),
+                    "Δ OI sem.": (f"{'+' if oi_evo[tag]['delta'] >= 0 else ''}{ol.fmt_qty(oi_evo[tag]['delta'])}"
+                                  f" ({oi_evo[tag]['delta_pct']:+.0f}%) desde {oi_evo[tag]['fecha_ini'][5:]}"
+                                  if oi_evo[tag]["delta_pct"] is not None else "—"),
+                    "Contratos sem.": (ol.fmt_qty(oi_evo[tag]["contratos"])
+                                       if oi_evo[tag]["contratos"] is not None else "—"),
                     "Volumen": ol.fmt_qty(w["volume"]),
                     "IV": f"{w['iv']*100:.1f}%",
                     "Δ": f"{w['delta']:.2f}",
@@ -1085,6 +1106,41 @@ else:
                            "÷ Open Interest: mide cuánto se está rotando el muro. Yahoo no entrega OI "
                            "histórico ni separa aperturas de cierres, así que no se puede saber con "
                            "certeza cuántos contratos del muro se cerraron durante la semana.")
+
+                # ---- Historial de Open Interest (solo Megacap) ----
+                if row["universe"] != MEGACAP:
+                    st.caption("Historial de OI: solo se guarda para las Megacap.")
+                elif oi_hist is None:
+                    st.caption("Historial de OI: todavía no hay fotos guardadas para esta empresa "
+                               "(se toma una cada día hábil después del cierre).")
+                else:
+                    fechas = sorted(oi_hist["fecha"].unique())
+                    st.caption(f"**Δ OI sem.** = OI actual vs la primera foto de los últimos "
+                               f"{ol.OI_WINDOW_DAYS} días; si baja con contratos transados, se están "
+                               "cerrando posiciones y el muro se debilita. **Contratos sem.** = volumen de "
+                               "contratos sumado en esas fotos. Historial disponible: "
+                               f"{len(fechas)} foto(s), desde {fechas[0]} hasta {fechas[-1]}.")
+                    series = [(tag, e["serie"]) for tag, e in oi_evo.items() if e["serie"] is not None]
+                    if series and len(fechas) >= 2:
+                        with st.expander("Evolución del Open Interest de cada muro", expanded=False):
+                            fig_oi = go.Figure()
+                            for tag, sr in series:
+                                fig_oi.add_trace(go.Scatter(
+                                    x=sr["fecha"], y=sr["oi"], mode="lines+markers",
+                                    line=dict(color=WALL_STYLE[tag], width=1.6), name=f"{tag} OI"))
+                                fig_oi.add_trace(go.Bar(
+                                    x=sr["fecha"], y=sr["vol"], marker_color=WALL_STYLE[tag],
+                                    opacity=0.35, name=f"{tag} contratos del día", yaxis="y2"))
+                            fig_oi.update_layout(
+                                height=320, template="plotly_dark", plot_bgcolor="#171a21",
+                                paper_bgcolor="#171a21", margin=dict(t=10, b=10), barmode="group",
+                                yaxis=dict(title="Open Interest"),
+                                yaxis2=dict(title="Contratos del día", overlaying="y", side="right",
+                                            showgrid=False),
+                                legend=dict(orientation="h", y=-0.2), xaxis=dict(type="category"))
+                            st.plotly_chart(fig_oi, width="stretch")
+                            st.caption("Cada foto se toma después del cierre: el OI es el del cierre del "
+                                       "día hábil anterior y las barras son los contratos transados ese día.")
         elif opt_data:
             st.info(f"{ticker} no tiene cadena de opciones disponible.")
 

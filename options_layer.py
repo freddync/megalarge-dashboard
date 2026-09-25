@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import datetime
 import math
+import os
 
 import numpy as np
 import pandas as pd
@@ -416,3 +417,48 @@ def zone_volume(bars: pd.DataFrame, strike: float, zone_pct: float = WALL_ZONE_P
     """Acciones transadas durante la semana dentro de la zona ±zone_pct% del strike."""
     z = zone_pct / 100
     return float(_spread_volume(bars, np.array([strike * (1 - z), strike * (1 + z)]))[0])
+
+
+# ---------------------------------------------------------------------------
+# Historial de Open Interest (fotos diarias de scripts/snapshot_oi.py, Megacap)
+# ---------------------------------------------------------------------------
+
+OI_HIST_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "oi_hist")
+OI_WINDOW_DAYS = 7   # "la última semana" = fotos de los últimos 7 días corridos
+
+
+def load_oi_hist(ticker: str) -> pd.DataFrame | None:
+    path = os.path.join(OI_HIST_DIR, f"{ticker}.csv")
+    if not os.path.exists(path):
+        return None
+    df = pd.read_csv(path, dtype={"fecha": str, "exp": str, "tipo": str})
+    return df if not df.empty else None
+
+
+def wall_oi_history(hist: pd.DataFrame | None, exp: str, tipo: str, strike: float,
+                    oi_now: float | None = None) -> dict:
+    """Evolución del OI de un muro (un strike de un vencimiento) en la última semana.
+
+    Devuelve: serie (DataFrame fecha/oi/vol), oi_ini y fecha_ini (primera foto de la
+    ventana), delta y delta_pct (OI actual vs oi_ini) y contratos (volumen sumado
+    de las fotos de la ventana). Todo None si no hay historial para ese muro.
+    """
+    vacio = {"serie": None, "oi_ini": None, "fecha_ini": None, "delta": None,
+             "delta_pct": None, "contratos": None, "n_fotos": 0}
+    if hist is None or hist.empty:
+        return vacio
+    s = hist[(hist["exp"] == exp) & (hist["tipo"] == tipo) & (np.isclose(hist["strike"], strike))]
+    if s.empty:
+        return vacio
+    s = s.sort_values("fecha")[["fecha", "oi", "vol"]]
+    ultima = pd.Timestamp(hist["fecha"].max())
+    desde = (ultima - pd.Timedelta(days=OI_WINDOW_DAYS)).strftime("%Y-%m-%d")
+    w = s[s["fecha"] >= desde]
+    if w.empty:
+        w = s.tail(1)
+    oi_ini, fecha_ini = float(w["oi"].iloc[0]), w["fecha"].iloc[0]
+    ref = float(oi_now) if oi_now is not None else float(s["oi"].iloc[-1])
+    delta = ref - oi_ini
+    return {"serie": s, "oi_ini": oi_ini, "fecha_ini": fecha_ini, "delta": delta,
+            "delta_pct": (delta / oi_ini * 100) if oi_ini else None,
+            "contratos": float(w["vol"].sum()), "n_fotos": len(w)}

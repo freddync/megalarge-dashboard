@@ -6,3 +6,4 @@ venv/
 _apptest*.py
 mock_opt.py
 diagnostico/diagnostico_opciones.txt
+scripts/_foto_oi_log.txt

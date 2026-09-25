@@ -88,5 +88,11 @@ jobs:
           fi
           git add data/precios data/precios_semanal data/_ultima_actualizacion.json
           git commit -m "Actualizacion automatica de precios ($(TZ=America/New_York date '+%Y-%m-%d %H:%M NY'))"
-          git push
+          # la foto de Open Interest tambien hace push: si choca, se rebasa y se reintenta
+          ok=no
+          for i in 1 2 3 4 5; do
+            if git pull --rebase origin main && git push; then ok=si; break; fi
+            echo "Push rechazado, reintento $i..."; sleep 20
+          done
+          [ "$ok" = si ] || exit 1
           echo "Datos publicados. Streamlit Cloud va a redeployar solo en 1-2 minutos."

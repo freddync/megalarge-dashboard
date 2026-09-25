@@ -167,6 +167,20 @@ más próximos**:
 - Limitación: los muros son la foto del Open Interest de hoy (Yahoo no entrega OI
   histórico), así que no se sabe si el muro ya estaba ahí al inicio de la semana.
 
+### Historial de Open Interest (solo Megacap)
+
+La Action `.github/workflows/foto-open-interest.yml` toma **una foto al día, después del
+cierre** (~16:30-19:30 NY), del OI y del volumen de contratos de las 81 Megacap
+(`scripts/snapshot_oi.py` → `data/oi_hist/{TICKER}.csv`): vencimientos de las próximas
+3 semanas, strikes a ±20% del precio, últimos 60 días. Si la foto del día ya existe
+(feriado o corrida repetida) se omite. Para tomarla a mano: `Foto_OI_Local.bat`, o en
+GitHub → Actions → "Foto diaria de Open Interest" → *Run workflow*.
+
+Con eso, la tabla de muros muestra **Δ OI sem.** (OI actual vs la primera foto de los
+últimos 7 días) y **Contratos sem.**, más un gráfico de la evolución del OI de cada muro.
+Si el OI de un muro baja mientras se transan contratos, se están cerrando posiciones y el
+muro se debilita. El historial parte desde la primera foto (Yahoo no entrega OI pasado).
+
 - Los strikes se filtran a ±25% del spot, igual que en el script de Colab.
 - Δ y Γ se calculan con Black-Scholes (r = 4.5%) sobre la volatilidad implícita, porque
   Yahoo no entrega griegas.

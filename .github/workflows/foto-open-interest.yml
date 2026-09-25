@@ -1,0 +1,77 @@
+name: Foto diaria de Open Interest (Megacap)
+
+# Una foto al dia, DESPUES del cierre, del Open Interest y del volumen de
+# contratos de las 81 Megacap (ver scripts/snapshot_oi.py).
+#
+# El cron (UTC) se dispara 4 veces entre 20:30 y 23:30 UTC, que cae entre las
+# 16:30 y las 19:30 de Nueva York en horario de verano (15:30-18:30 en invierno).
+# El guard deja pasar solo a partir de las 16:00 NY. Las corridas extra sirven de
+# reintento: si la foto del dia ya existe, el script la omite y no hay commit.
+on:
+  schedule:
+    - cron: "30 20-23 * * 1-5"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: foto-open-interest
+  cancel-in-progress: false
+
+jobs:
+  foto:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Verificar que el mercado ya cerro
+        id: guard
+        run: |
+          NY_HORA=$(TZ=America/New_York date +%-H)
+          NY_DIA=$(TZ=America/New_York date +%u)
+          echo "Hora en Nueva York: $(TZ=America/New_York date '+%Y-%m-%d %H:%M %Z (%a)')"
+          if [ "${{ github.event_name }}" != "schedule" ]; then
+            echo "-> Ejecucion manual: se corre igual."; echo "correr=si" >> "$GITHUB_OUTPUT"
+          elif [ "$NY_DIA" -gt 5 ]; then
+            echo "-> Fin de semana: se omite."; echo "correr=no" >> "$GITHUB_OUTPUT"
+          elif [ "$NY_HORA" -ge 16 ] && [ "$NY_HORA" -le 21 ]; then
+            echo "-> Despues del cierre: se toma la foto."; echo "correr=si" >> "$GITHUB_OUTPUT"
+          else
+            echo "-> Antes del cierre: se omite."; echo "correr=no" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Descargar el repositorio
+        if: steps.guard.outputs.correr == 'si'
+        uses: actions/checkout@v4
+
+      - name: Preparar Python
+        if: steps.guard.outputs.correr == 'si'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependencias
+        if: steps.guard.outputs.correr == 'si'
+        run: pip install pandas yfinance
+
+      - name: Tomar la foto de Open Interest
+        if: steps.guard.outputs.correr == 'si'
+        run: python scripts/snapshot_oi.py
+
+      - name: Publicar
+        if: steps.guard.outputs.correr == 'si'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/oi_hist
+          if git diff --cached --quiet; then
+            echo "Sin fotos nuevas (ya existian o feriado)."; exit 0
+          fi
+          git commit -m "Foto de Open Interest Megacap ($(TZ=America/New_York date '+%Y-%m-%d'))"
+          # la Action de precios tambien hace push: si choca, se rebasa y se reintenta
+          for i in 1 2 3 4 5; do
+            git pull --rebase origin main && git push && exit 0
+            echo "Push rechazado, reintento $i..."; sleep 20
+          done
+          exit 1
