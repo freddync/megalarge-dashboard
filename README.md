@@ -172,7 +172,7 @@ más próximos**:
 La Action `.github/workflows/foto-open-interest.yml` toma **una foto al día, después del
 cierre** (~16:30-19:30 NY), del OI y del volumen de contratos de las 81 Megacap
 (`scripts/snapshot_oi.py` → `data/oi_hist/{TICKER}.csv`): vencimientos de las próximas
-3 semanas, strikes a ±20% del precio, últimos 60 días. Si la foto del día ya existe
+2 semanas (mínimo los 2 más próximos), strikes a ±15% del precio, últimos 30 días. Si la foto del día ya existe
 (feriado o corrida repetida) se omite. Para tomarla a mano: `Foto_OI_Local.bat`, o en
 GitHub → Actions → "Foto diaria de Open Interest" → *Run workflow*.
 

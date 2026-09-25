@@ -14,7 +14,7 @@ contratos se abrieron o cerraron durante D.
 
 Qué guarda (data/oi_hist/{TICKER}.csv), por día:
   fecha, exp, tipo (C/P), strike, oi, vol, iv
-  - vencimientos de los próximos MAX_DTE días (máximo MAX_EXPS)
+  - vencimientos de los próximos MAX_DTE días (máximo MAX_EXPS, mínimo MIN_EXPS)
   - strikes dentro de ±STRIKE_WINDOW del precio
   - se descartan filas con OI y volumen en cero
   - se conservan los últimos KEEP_DAYS días de fotos
@@ -47,12 +47,17 @@ COMPANY_INFO = os.path.join(DATA_DIR, "company_info.json")
 SELLO_PATH = os.path.join(OUT_DIR, "_ultima_foto.json")
 
 UNIVERSO = "Megacap (>$200B)"
-MAX_DTE = 21          # vencimientos de las próximas 3 semanas...
-MAX_EXPS = 8          # ...con un máximo de 8 (algunas tienen vencimientos diarios)
-STRIKE_WINDOW = 0.20  # ±20% del precio
-KEEP_DAYS = 60        # días de fotos que se conservan
+MAX_DTE = 14          # vencimientos de las próximas 2 semanas...
+MAX_EXPS = 6          # ...con un máximo de 6 (algunas tienen vencimientos diarios)
+MIN_EXPS = 2          # pero siempre al menos los 2 más próximos (las que solo tienen mensuales)
+STRIKE_WINDOW = 0.15  # ±15% del precio
+KEEP_DAYS = 30        # días de fotos que se conservan
 SLEEP_BETWEEN = 0.5
 MAX_FAIL_RATIO = 0.30
+
+class SinOpciones(Exception):
+    """El ticker no tiene opciones listadas en Yahoo (no cuenta como falla)."""
+
 
 COLS = ["fecha", "exp", "tipo", "strike", "oi", "vol", "iv"]
 
@@ -80,15 +85,12 @@ def snapshot_ticker(yf, ticker: str) -> tuple[str, pd.DataFrame]:
         raise RuntimeError("precio inválido")
 
     hoy = datetime.date.fromisoformat(fecha)
-    exps = []
-    for e in (t.options or []):
-        dte = (datetime.date.fromisoformat(e) - hoy).days
-        if 0 <= dte <= MAX_DTE:
-            exps.append(e)
-        if len(exps) >= MAX_EXPS:
-            break
-    if not exps:
-        raise RuntimeError("sin vencimientos próximos")
+    futuros = [e for e in (t.options or []) if (datetime.date.fromisoformat(e) - hoy).days >= 0]
+    if not futuros:
+        raise SinOpciones("sin opciones listadas")
+    exps = [e for e in futuros if (datetime.date.fromisoformat(e) - hoy).days <= MAX_DTE][:MAX_EXPS]
+    if len(exps) < MIN_EXPS:
+        exps = futuros[:MIN_EXPS]
 
     lo, hi = spot * (1 - STRIKE_WINDOW), spot * (1 + STRIKE_WINDOW)
     partes = []
@@ -131,7 +133,7 @@ def main():
     if args.limit:
         tickers = tickers[: args.limit]
 
-    ok, omitidos, fallidos = [], [], []
+    ok, omitidos, fallidos, sin_opciones = [], [], [], []
     fechas = set()
     for i, tk in enumerate(tickers, 1):
         path = os.path.join(OUT_DIR, f"{tk}.csv")
@@ -149,20 +151,25 @@ def main():
                 todo.to_csv(path, index=False)
                 ok.append(tk)
                 print(f"[{i}/{len(tickers)}] {tk}: {len(filas)} filas ({fecha})")
+        except SinOpciones:
+            sin_opciones.append(tk)
+            print(f"[{i}/{len(tickers)}] {tk}: sin opciones listadas, se omite")
         except Exception as e:  # un ticker malo no debe botar la corrida completa
             fallidos.append(tk)
             print(f"[{i}/{len(tickers)}] {tk}: ERROR {type(e).__name__}: {e}")
         time.sleep(SLEEP_BETWEEN)
 
-    print(f"\nOK: {len(ok)} · ya existían: {len(omitidos)} · fallidos: {len(fallidos)} {fallidos}")
+    print(f"\nOK: {len(ok)} · ya existían: {len(omitidos)} · sin opciones: {sin_opciones} · "
+          f"fallidos: {len(fallidos)} {fallidos}")
     if ok:
         with open(SELLO_PATH, "w", encoding="utf-8") as f:
             json.dump({
                 "utc": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
                 "fechas_sesion": sorted(fechas),
-                "tickers_ok": len(ok), "tickers_fallidos": fallidos,
+                "tickers_ok": len(ok), "tickers_sin_opciones": sin_opciones,
+                "tickers_fallidos": fallidos,
             }, f, ensure_ascii=False, indent=1)
-    if tickers and len(fallidos) / len(tickers) > MAX_FAIL_RATIO:
+    if tickers and len(fallidos) / max(len(tickers) - len(sin_opciones), 1) > MAX_FAIL_RATIO:
         print("Demasiados tickers fallidos: se marca la corrida como fallida.")
         sys.exit(1)
 
