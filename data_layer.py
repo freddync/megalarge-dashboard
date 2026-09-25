@@ -163,14 +163,14 @@ def pct_return(series, periods):
 
 
 # ---------------------------------------------------------------------------
-# RSI (5 periodos) y MACD (12/26/9)
+# RSI (14 periodos, estándar) y MACD (12/26/9)
 # ---------------------------------------------------------------------------
 # Son independientes de la SMA a proposito: cada indicador produce su propia
 # señal y su propia columna ordenable en el dashboard.
 
-RSI_PERIOD = 5
-RSI_SOBRECOMPRA = 80      # con periodo 5 el indicador es muy volatil: 70/30 se
-RSI_SOBREVENTA = 20       # cruzaria casi a diario y la señal perderia valor
+RSI_PERIOD = 14           # RSI estándar de Wilder
+RSI_SOBRECOMPRA = 70      # límites clásicos para 14 periodos
+RSI_SOBREVENTA = 30
 
 MACD_FAST, MACD_SLOW, MACD_SIGNAL = 12, 26, 9
 
@@ -210,7 +210,7 @@ def compute_rsi(close, period=RSI_PERIOD):
 
 
 def rsi_signal(rsi):
-    """Etiqueta del RSI segun los limites 80/20."""
+    """Etiqueta del RSI segun los limites 70/30."""
     if rsi is None or pd.isna(rsi):
         return "Sin datos"
     if rsi >= RSI_SOBRECOMPRA:
@@ -285,7 +285,7 @@ def build_summary(window, company_info, freq=FREQ_DAILY):
     Calcula TRES indicadores independientes, cada uno con su valor numerico y su
     etiqueta, para que en el dashboard se puedan ordenar por separado:
       - SMA `window` con banda +/-1.5 sigma  -> columna "Zona"
-      - RSI de 5 periodos (limites 80/20)    -> columna "Señal RSI"
+      - RSI de 14 periodos (limites 70/30)    -> columna "Señal RSI"
       - MACD 12/26/9 (estado del histograma) -> columna "Señal MACD"
     """
     periods = RETURN_PERIODS.get(freq, RETURN_PERIODS[FREQ_DAILY])
@@ -305,7 +305,7 @@ def build_summary(window, company_info, freq=FREQ_DAILY):
         down_last = down.iloc[-1]
         signal, dist_pct, band_pos = zone_signal(close, sma_last, up_last, down_last)
 
-        # --- RSI 5 ---
+        # --- RSI 14 ---
         rsi_serie = compute_rsi(cierre)
         rsi_val = rsi_serie.iloc[-1] if len(rsi_serie) else None
 
@@ -334,7 +334,7 @@ def build_summary(window, company_info, freq=FREQ_DAILY):
             "band_pos": round(float(band_pos), 3) if band_pos is not None else None,
             "signal": signal,
             "zone": short_signal(signal),
-            # --- RSI 5 (independiente de la SMA) ---
+            # --- RSI 14 (independiente de la SMA) ---
             "rsi": round(float(rsi_val), 1) if rsi_val is not None and pd.notna(rsi_val) else None,
             "rsi_signal": rsi_signal(rsi_val),
             # --- MACD 12/26/9 (independiente de los otros dos) ---

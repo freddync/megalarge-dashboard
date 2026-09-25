@@ -1,7 +1,7 @@
 # Dashboard Integrado — Megacap + Large Cap
 
 Dashboard técnico + fundamental de 894 empresas (81 Megacap >$200B + 813 Large Cap $10B-$200B),
-con SMA 100 + banda ±1.5σ, RSI 5 y MACD, construido en Streamlit.
+con SMA 100 + banda ±1.5σ, RSI 14 y MACD, construido en Streamlit.
 
 ## Indicadores y señales
 
@@ -11,13 +11,12 @@ numérico y su etiqueta, y **cada columna se puede ordenar por separado** en la 
 | Indicador | Columnas | Señal |
 |---|---|---|
 | **SMA 100** con banda ±1.5σ | `Dist. SMA %` y `Zona` | Sobrevendido / Bajista / Alcista / Sobrecomprado |
-| **RSI 5** (límites 80/20) | `RSI 5` y `Señal RSI` | Sobreventa / Neutral / Sobrecompra |
+| **RSI 14** (límites 70/30) | `RSI 14` y `Señal RSI` | Sobreventa / Neutral / Sobrecompra |
 | **MACD 12/26/9** | `MACD hist %` y `Señal MACD` | Bajista / Perdiendo fuerza / Pre-cruce / Alcista |
 
 Notas de criterio:
 
-- El **RSI de 5 periodos** usa 80/20 en vez del clásico 70/30: con periodo tan corto el
-  indicador cruza 70/30 casi a diario y la señal pierde valor.
+- El **RSI** es el estándar de Wilder: 14 periodos con límites 70/30.
 - El RSI se calcula con el suavizado de Wilder **inicializado con media simple** (validado
   contra el ejemplo canónico del libro de Wilder: 70.46 vs 70.53 publicado).
 - Los cuatro estados del **MACD** salen del signo del histograma y de su pendiente:
@@ -28,6 +27,13 @@ Notas de criterio:
   distinto valor nominal.
 - Las señales son deliberadamente **independientes**: una empresa puede estar Sobrecomprada
   por SMA y Neutral por RSI. No se combinan en un puntaje único.
+
+## Listado "Sobrevendido + Pre-cruce"
+
+Pestaña aparte en la vista General con las empresas que cumplen **a la vez**: precio bajo
+la banda inferior de la SMA 100 (Zona = Sobrevendido) y MACD en Pre-cruce. Respeta los
+filtros del panel izquierdo (universo, sector) y sus filas abren la empresa igual que la
+tabla principal.
 
 ## Frecuencia: diaria o semanal
 

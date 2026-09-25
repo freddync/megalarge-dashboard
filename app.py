@@ -693,12 +693,17 @@ if view == "General":
         f"**Señal MACD** = estado del histograma {dl.MACD_FAST}/{dl.MACD_SLOW}/{dl.MACD_SIGNAL} "
         "(Pre-cruce = compra anticipada, Perdiendo fuerza = venta)")
 
-    tab1, tab2, tab3, tab4 = st.tabs(["Resumen técnico", "Indicadores financieros", "P/E vs. crecimiento", "Resumen por sector"])
+    # Listado aparte: precio bajo la banda inferior (SMA±1.5σ) Y MACD en pre-cruce
+    oport = filtered[(filtered["zone"] == "Sobrevendido") & (filtered["macd_signal"] == "Pre-cruce")]
+    tab1, tab_op, tab2, tab3, tab4 = st.tabs(["Resumen técnico",
+                                              f"🎯 Sobrevendido + Pre-cruce ({len(oport)})",
+                                              "Indicadores financieros", "P/E vs. crecimiento",
+                                              "Resumen por sector"])
 
     with tab1:
         # Cada indicador aporta su valor numerico y su etiqueta, y ambos son
         # ordenables por separado: se puede ordenar por "Dist. SMA %" o por
-        # "Zona", por "RSI 5" o por "Señal RSI", etc.
+        # "Zona", por "RSI 14" o por "Señal RSI", etc.
         raw_cols_1 = ["ticker", "name", "universe", "sector", "close", "sma", "dist_sma_pct",
                       "zone", "rsi", "rsi_signal", "macd_hist_pct", "macd_signal",
                       "r1m", "r3m", "r6m", "r1y"]
@@ -719,6 +724,30 @@ if view == "General":
                             key=table_key("tbl_tecnico"))
         handle_header_sort(sel1, "tecnico")
         maybe_open_empresa(sel1, show)
+
+    with tab_op:
+        st.markdown(
+            f"Empresas que cumplen **las dos condiciones a la vez**:\n"
+            f"- **Zona = Sobrevendido**: el precio está bajo la banda inferior de la SMA{sma_window} "
+            f"(SMA − 1.5σ).\n"
+            f"- **Señal MACD = Pre-cruce**: el histograma {dl.MACD_FAST}/{dl.MACD_SLOW}/{dl.MACD_SIGNAL} "
+            "sigue negativo pero ya está subiendo (la caída pierde fuerza, antes de la golden cross).")
+        if oport.empty:
+            st.info("Hoy ninguna empresa (con los filtros del panel izquierdo) cumple ambas condiciones.")
+        else:
+            show_op = apply_saved_sort(oport[raw_cols_1].copy(), "oportunidades", colmap_1)
+            show_op.columns = disp_cols_1
+            st.caption("👉 Click en una fila para abrir la empresa · click en el título de una columna "
+                       "para ordenar.")
+            st.caption(sort_caption("oportunidades"))
+            sel_op = st.dataframe(show_op, width="stretch", height=min(520, 38 + 35 * len(show_op)),
+                                  hide_index=True, on_select="rerun",
+                                  selection_mode=["single-row", "single-column"],
+                                  key=table_key("tbl_oportunidades"))
+            handle_header_sort(sel_op, "oportunidades")
+            maybe_open_empresa(sel_op, show_op)
+        st.caption("Es un filtro técnico, no una recomendación de compra: conviene revisar la empresa "
+                   "(fundamentales, muros de opciones) antes de decidir.")
 
     with tab2:
         pe_ev_df, sector_pe, sector_pe_n, sector_ev, sector_ev_n = get_pe_ev_table(sma_window, freq, DATA_VERSION)
