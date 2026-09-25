@@ -1,23 +1,14 @@
 {
- "utc": "2026-09-25T02:09:59+00:00",
+ "utc": "2026-09-25T02:15:25+00:00",
  "fechas_sesion": [
   "2026-09-24"
  ],
- "tickers_ok": 67,
- "tickers_fallidos": [
-  "APH",
-  "AZN",
-  "BHP",
+ "tickers_ok": 10,
+ "tickers_sin_opciones": [
   "BRK-A",
   "CCZ",
   "GOOGM",
-  "GOOGN",
-  "LIN",
-  "MUFG",
-  "NVS",
-  "RY",
-  "SAN",
-  "TD",
-  "TM"
- ]
+  "GOOGN"
+ ],
+ "tickers_fallidos": []
 }
