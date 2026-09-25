@@ -5,3 +5,4 @@ venv/
 .streamlit/secrets.toml
 _apptest*.py
 mock_opt.py
+diagnostico/diagnostico_opciones.txt

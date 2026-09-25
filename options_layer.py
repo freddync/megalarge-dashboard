@@ -97,11 +97,21 @@ def fetch_chains(ticker: str, n_exp: int = N_EXPIRATIONS, today: datetime.date |
     today = today or datetime.date.today()
     t = yf.Ticker(ticker)
 
-    hist = t.history(period="5d")
-    if hist is None or hist.empty:
-        raise RuntimeError(f"No hay historial reciente para {ticker}")
-    spot = float(hist["Close"].iloc[-1])
-    avg_vol_5d = float(hist["Volume"].tail(5).mean())
+    hist = t.history(period="10d")
+    closes = hist["Close"].dropna() if hist is not None and not hist.empty else pd.Series(dtype=float)
+    # Yahoo a veces entrega la última fila con Close vacío (sesión en curso o recién
+    # cerrada). Se usa el último cierre válido; si no hay, el precio de fast_info.
+    spot = float(closes.iloc[-1]) if len(closes) else float("nan")
+    if not math.isfinite(spot) or spot <= 0:
+        try:
+            spot = float(t.fast_info["last_price"])
+        except Exception:
+            spot = float("nan")
+    if not math.isfinite(spot) or spot <= 0:
+        raise RuntimeError(f"No se pudo obtener el precio actual de {ticker}")
+    vols = hist["Volume"].dropna() if hist is not None and not hist.empty else pd.Series(dtype=float)
+    vols = vols[vols > 0]
+    avg_vol_5d = float(vols.tail(5).mean()) if len(vols) else 0.0
 
     expirations = t.options or []
     if not expirations:
