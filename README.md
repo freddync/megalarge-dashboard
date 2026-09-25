@@ -138,9 +138,23 @@ conectada. El flujo para refrescar precios/fundamentales es:
 
 ## Opciones (calls/puts y GEX)
 
-En la vista de cada empresa, al lado del gráfico de precio, se muestra el Open Interest,
-el volumen y el GEX por nivel de strike para los **2 vencimientos más próximos**, más una
-tabla con los "muros" (PW2/PW1/CW1/CW2 = los 2 strikes con mayor OI por lado).
+En la vista de cada empresa se eligen uno de los **2 vencimientos más próximos** y se
+muestran sus "muros" (PW2/PW1/CW1/CW2 = los 2 strikes con mayor OI por lado) sobre el
+gráfico de precio, más una sección de detalle con:
+
+- **Gráfico "Última semana vs muros"**: velas de **1 hora** de los últimos 5 días hábiles,
+  con cada muro y su zona de contacto (±1.5% del strike) extendidos **hasta el cierre del
+  día de vencimiento**. El espacio en blanco a la derecha son las horas de mercado que
+  quedan (se saltan noches y fines de semana).
+- **Comportamiento de cada muro** (columna en la tabla y etiqueta en el gráfico):
+  - *Rompió ↑/↓*: la semana empezó de un lado del strike y hoy cierra del otro.
+  - *Probando*: tocó la zona y sigue dentro de ella.
+  - *Rebotando*: tocó la zona (incluso perforando con mecha) y ya se alejó ≥0.75%.
+  - *Acercándose*: sin tocarla, a menos de 6% y con la distancia achicándose en la
+    última sesión.
+  - *Lejos*: ninguna de las anteriores.
+- Limitación: los muros son la foto del Open Interest de hoy (Yahoo no entrega OI
+  histórico), así que no se sabe si el muro ya estaba ahí al inicio de la semana.
 
 - Los strikes se filtran a ±25% del spot, igual que en el script de Colab.
 - Δ y Γ se calculan con Black-Scholes (r = 4.5%) sobre la volatilidad implícita, porque
@@ -150,7 +164,8 @@ tabla con los "muros" (PW2/PW1/CW1/CW2 = los 2 strikes con mayor OI por lado).
   estándar de que los dealers están largos en calls y cortos en puts.
 
 **Esta sección sí necesita internet en vivo** (es la única del dashboard que no usa datos
-bundleados): descarga la cadena con `yfinance` y la cachea 15 minutos. Si no hay conexión
+bundleados): descarga la cadena con `yfinance` y las velas horarias desde la API de gráficos
+de Yahoo, y cachea ambas 15 minutos (botón "↻ Actualizar" para forzar). Si no hay conexión
 o la empresa no tiene opciones listadas, el resto de la página funciona igual y solo se
 muestra un aviso. Se puede apagar con el checkbox "Mostrar opciones".
 

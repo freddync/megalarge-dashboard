@@ -254,3 +254,109 @@ def fmt_gex(x) -> str:
     if ax >= 1e3:
         return f"{sign}${ax/1e3:.1f}K"
     return f"{sign}${ax:.0f}"
+
+
+# ---------------------------------------------------------------------------
+# Velas horarias de la ultima semana y comportamiento del precio en cada muro
+# ---------------------------------------------------------------------------
+
+INTRADAY_RANGE = "5d"          # ultima semana habil
+INTRADAY_INTERVAL = "60m"      # velas de 1 hora
+WALL_ZONE_PCT = 1.5            # zona de "contacto" alrededor del strike, en % del strike
+APPROACH_ZONE_MULT = 4         # "Acercandose" solo si esta a menos de 4 zonas del muro
+APPROACH_LOOKBACK = 7          # ~1 sesion de velas horarias para medir la tendencia
+
+_YAHOO_HEADERS = {
+    "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                   "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"),
+}
+
+
+def fetch_intraday(ticker: str) -> pd.DataFrame:
+    """Velas de 1 hora de los ultimos 5 dias habiles (solo sesion regular).
+
+    Usa la API de graficos de Yahoo (no necesita crumb). El indice queda en hora
+    de Nueva York, sin zona horaria, para que Plotly lo dibuje tal cual.
+    """
+    import requests  # viene con yfinance
+
+    url = f"https://query1.finance.yahoo.com/v8/finance/chart/{ticker}"
+    params = {"range": INTRADAY_RANGE, "interval": INTRADAY_INTERVAL, "includePrePost": "false"}
+    r = requests.get(url, params=params, headers=_YAHOO_HEADERS, timeout=20)
+    r.raise_for_status()
+    res = (r.json().get("chart") or {}).get("result") or []
+    if not res or not res[0].get("timestamp"):
+        raise RuntimeError(f"Yahoo no devolvio velas horarias para {ticker}")
+    res = res[0]
+    q = res["indicators"]["quote"][0]
+    idx = (pd.to_datetime(res["timestamp"], unit="s", utc=True)
+             .tz_convert("America/New_York").tz_localize(None))
+    df = pd.DataFrame({"Open": q["open"], "High": q["high"], "Low": q["low"],
+                       "Close": q["close"], "Volume": q["volume"]}, index=idx)
+    df = df.dropna(subset=["Close"])
+    # Yahoo agrega un "tick" de cierre a las 16:00 sin volumen: no es una vela
+    df = df[~((df.index.hour == 16) & (df.index.minute == 0))]
+    df.index.name = "Date"
+    return df
+
+
+def classify_wall(bars: pd.DataFrame, strike: float, zone_pct: float = WALL_ZONE_PCT) -> dict:
+    """Clasifica como se ha movido el precio respecto a un muro en la ultima semana.
+
+    Estados (se evalúan en este orden):
+      - "Rompió ↑/↓": la semana empezo de un lado del strike y ahora cierra del otro.
+      - "Probando":    toco la zona del muro y sigue dentro de ella.
+      - "Rebotando":   toco la zona y ya se alejo al menos media zona desde el punto
+                       mas cercano (tambien cuenta una perforacion falsa que volvio).
+      - "Acercándose": no lo ha tocado, esta a menos de 4 zonas y la distancia se
+                       redujo respecto a ~1 sesion atras.
+      - "Lejos":       nada de lo anterior.
+
+    Devuelve dict con estado, distancia actual (% firmado, + = precio sobre el muro),
+    distancia minima de la semana (%, >= 0) y un detalle legible.
+    """
+    if bars is None or bars.empty or not strike:
+        return {"estado": "Sin datos", "dist": None, "min_dist": None, "detalle": ""}
+
+    close = bars["Close"].astype(float)
+    first, last = float(close.iloc[0]), float(close.iloc[-1])
+    dist_now = (last / strike - 1) * 100
+    side_first = 1 if first >= strike else -1
+    side_now = 1 if last >= strike else -1
+
+    if side_first != side_now:
+        arrow = "↑" if side_now > 0 else "↓"
+        return {"estado": f"Rompió {arrow}", "dist": dist_now, "min_dist": 0.0,
+                "detalle": f"empezó la semana {'sobre' if side_first > 0 else 'bajo'} el strike "
+                           f"y ahora está {abs(dist_now):.1f}% {'sobre' if side_now > 0 else 'bajo'}"}
+
+    # distancia mas cercana alcanzada con mechas (lado del precio): si el precio esta
+    # sobre el muro, lo que se acerca es el minimo; si esta bajo, el maximo
+    if side_now > 0:
+        extremes = (bars["Low"].astype(float) / strike - 1) * 100
+        closest = extremes.min()
+    else:
+        extremes = (1 - bars["High"].astype(float) / strike) * 100
+        closest = extremes.min()
+    min_dist = max(float(closest), 0.0)   # < 0 = perforo con mecha y volvio
+    pierced = float(closest) < 0
+    touched = float(closest) <= zone_pct
+    abs_now = abs(dist_now)
+
+    if touched and abs_now <= zone_pct:
+        return {"estado": "Probando", "dist": dist_now, "min_dist": min_dist,
+                "detalle": f"está a {abs_now:.1f}% del muro, dentro de la zona de ±{zone_pct:g}%"}
+    if touched and abs_now - min_dist >= zone_pct / 2:
+        extra = " (perforó con mecha y volvió)" if pierced else ""
+        return {"estado": "Rebotando", "dist": dist_now, "min_dist": min_dist,
+                "detalle": f"llegó a {min_dist:.1f}% del muro{extra} y se alejó a {abs_now:.1f}%"}
+
+    lb = min(APPROACH_LOOKBACK, len(close) - 1)
+    if lb > 0:
+        dist_prev = abs(float(close.iloc[-1 - lb]) / strike - 1) * 100
+        if abs_now < dist_prev and abs_now <= zone_pct * APPROACH_ZONE_MULT:
+            return {"estado": "Acercándose", "dist": dist_now, "min_dist": min_dist,
+                    "detalle": f"pasó de {dist_prev:.1f}% a {abs_now:.1f}% en la última sesión"}
+
+    return {"estado": "Lejos", "dist": dist_now, "min_dist": min_dist,
+            "detalle": f"a {abs_now:.1f}% del muro"}
