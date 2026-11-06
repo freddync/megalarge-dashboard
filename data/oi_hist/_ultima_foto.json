@@ -1,10 +1,9 @@
 {
- "utc": "2026-11-05T01:01:00+00:00",
+ "utc": "2026-11-06T01:05:43+00:00",
  "fechas_sesion": [
-  "2026-11-03",
   "2026-11-04"
  ],
- "tickers_ok": 30,
+ "tickers_ok": 47,
  "tickers_sin_opciones": [
   "BRK-A",
   "CCZ",
